@@ -18,12 +18,7 @@ import module.explore_tasks.explore_task
 from core import position, picture, utils
 from core.config.config_set import ConfigSet
 from core.device import emulator_manager
-from core.device.Control import Control
-from core.device.Screenshot import Screenshot
-from core.device.connection import Connection
 from core.device.emulator_manager import process_api
-from core.device.uiautomator2_client import BAAS_U2_Initer, __atx_agent_version__
-from core.device.uiautomator2_client import U2Client
 from core.exception import RequestHumanTakeOver, FunctionCallTimeout, PackageIncorrect, LogTraceback
 from core.notification import notify, toast
 from core.pushkit import push
@@ -121,6 +116,8 @@ class Baas_thread:
         else:
             self.ocr_img_pass_method = 0
             self.shared_memory_name = os.path.basename(self.config_set.config_dir)
+            if self.config_set.config.screenshot_method == 'android_companion':
+                self.shared_memory_name = 'android-companion-' + self.shared_memory_name
 
     def get_logger(self):
         return self.logger
@@ -131,7 +128,7 @@ class Baas_thread:
     def click(self, x, y, count=1, rate=0, duration=0, wait_over=False):
         if not self.flag_run:
             raise RequestHumanTakeOver
-        if self.control.method == "nemu":
+        if self.control.method in ("nemu", "android_companion"):
             self.click_thread(x, y, count, rate, duration)
             return
         click_ = threading.Thread(target=self.click_thread, args=(x, y, count, rate, duration))
@@ -318,6 +315,9 @@ class Baas_thread:
             self.logger.error("Emulator start failed")
             return False
         try:
+            from core.device.Control import Control
+            from core.device.Screenshot import Screenshot
+            from core.device.connection import Connection
             self.connection = Connection(self)
             self.is_android_device = self.connection.is_android_device()
             self.server = self.connection.get_server()
@@ -409,6 +409,7 @@ class Baas_thread:
                 raise Exception("Global Server Invalid Language : " + game_lan + ".")
 
     def check_atx(self):
+        from core.device.uiautomator2_client import __atx_agent_version__
         self.logger.info("--------------Check ATX install ----------------")
         _d = self.u2._wait_for_device()
         if not _d:
@@ -426,6 +427,7 @@ class Baas_thread:
         self.logger.info("Uiautomator2 service started.")
 
     def set_up_atx_agent(self):
+        from core.device.uiautomator2_client import BAAS_U2_Initer
         init = BAAS_U2_Initer(self.u2._adb_device, self.logger)
         init.install()
 
@@ -530,6 +532,9 @@ class Baas_thread:
         """
             execute the task by call the corresponding function in func_dict
         """
+        if activity == 'refresh_uiautomator2' and self.config.screenshot_method == 'android_companion':
+            self.last_refresh_u2_time = time.time()
+            return True
         for i in range(0, 3):
             if i != 0:
                 self.logger.info("Retry Task " + activity + " " + str(i))
@@ -740,6 +745,17 @@ class Baas_thread:
         self.u2.swipe(fx * self.ratio, fy * self.ratio, tx * self.ratio, ty * self.ratio, duration)
         if post_sleep_time > 0:
             time.sleep(post_sleep_time)
+
+    def pinch(self, cx, cy, spread_start, spread_end, steps=30):
+        if not self.flag_run:
+            raise RequestHumanTakeOver
+        if self.config.screenshot_method in ('virtual_scrcpy', 'android_companion'):
+            from core.device.display_backend import display_backend
+            display_backend(self.config.screenshot_method).get_instance(self.serial).pinch(
+                int(cx * self.ratio), int(cy * self.ratio),
+                int(spread_start * self.ratio), int(spread_end * self.ratio), steps)
+        elif self.is_android_device:
+            self.u2().pinch_in(percent=int(spread_end / spread_start * 100), steps=steps)
 
     def get_ap(self, is_main_page=False):
         if is_main_page:
@@ -1095,6 +1111,12 @@ class Baas_thread:
         raise Exception("Invalid Screen Ratio")
 
     def _get_android_device_resolution(self):
+        if self.config.screenshot_method == 'android_companion':
+            from core.device.android_companion.proxy import AndroidCompanionProxy
+            self.u2 = AndroidCompanionProxy(self.serial)
+            self.last_refresh_u2_time = time.time()
+            return (1280, 720)
+        from core.device.uiautomator2_client import U2Client
         self.u2_client = U2Client.get_instance(self.serial)
         self.u2 = self.u2_client.get_connection()
         self.check_atx()
@@ -1124,6 +1146,7 @@ if __name__ == '__main__':
         "D:\\github\\bass\\blue_archive_auto_script\\src\\atx_app\\atx-agent_0.10.1_linux_386\\atx-agent"))
     # "D:\\github\\bass\\blue_archive_auto_script\\src\\atx_app\\atx-agent_0.10.0_linux_386\\atx-agent"
     import uiautomator2
+    from core.device.uiautomator2_client import BAAS_U2_Initer
 
     u2 = uiautomator2.connect("127.0.0.1:16512")
     from core.utils import Logger
