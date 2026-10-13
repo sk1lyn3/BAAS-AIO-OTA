@@ -3,18 +3,17 @@ import os
 import re
 from core.config.generated_user_config import Config
 from core.config.generated_static_config import StaticConfig
-from gui.util.customized_ui import BoundComponent
-from gui.util.translator import baasTranslator as bt
-from dataclasses import asdict
+from dataclasses import asdict, fields
 
 
 class ConfigSet:
     static_config: StaticConfig = None
 
-    def __init__(self, config_dir):
+    def __init__(self, config_dir, translator=None):
         # change happens in self.config ( dataclass )
         # save change : dataclass --> dict --> json_str
         super().__init__()
+        self._translator = translator
         if ConfigSet.static_config is None:
             ConfigSet._init_static_config()
         self.config: Config
@@ -41,7 +40,12 @@ class ConfigSet:
 
     def _init_config(self):
         with open(os.path.join(self.config_dir, "config.json"), 'r', encoding='utf-8') as f:
-            self.config = Config(**json.load(f))
+            user_config = json.load(f)
+        from core.config.default_config import DEFAULT_CONFIG
+        default_config = json.loads(DEFAULT_CONFIG)
+        config_data = {**default_config, **user_config}
+        config_fields = {field.name for field in fields(Config)}
+        self.config = Config(**{key: value for key, value in config_data.items() if key in config_fields})
         self.server_mode = self.get_server_mode(self.config.server)
 
     @staticmethod
@@ -53,10 +57,16 @@ class ConfigSet:
         if server in ['日服', '日服PC端']:
             return 'JP'
 
+    def _get_translator(self):
+        if self._translator is None:
+            from gui.util.translator import baasTranslator
+            self._translator = baasTranslator
+        return self._translator
+
     def get(self, key, default=None):
         self._init_config()
         value = getattr(self.config, key, default)
-        return bt.tr('ConfigTranslation', value)
+        return self._get_translator().tr('ConfigTranslation', value)
 
     def has(self, key):
         self._init_config()
@@ -64,7 +74,7 @@ class ConfigSet:
 
     def set(self, key, value):
         self._init_config()
-        value = bt.undo(value)
+        value = self._get_translator().undo(value)
         setattr(self.config, key, value)
         self.save()
         self.dynamic_update(key)
@@ -114,6 +124,7 @@ class ConfigSet:
         :param attribute: Attribute to inject (default is setText)
         :return: BoundComponent, which can be ignored
         """
+        from gui.util.customized_ui import BoundComponent
         bounded = BoundComponent(component, string_rule, self, attribute)
         self.inject_config_list.extend(re.findall(r'{(.*?)}', string_rule))
         self.inject_comp_list.append(bounded)
