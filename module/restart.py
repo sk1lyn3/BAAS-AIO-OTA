@@ -2,13 +2,19 @@ import time
 from datetime import datetime
 
 
+def _get_current_package(self):
+    if self.config.screenshot_method == "virtual_scrcpy":
+        from core.device.virtual_scrcpy_client import VirtualScrcpyClient
+        return VirtualScrcpyClient.get_instance(self.serial).get_foreground_package()
+    return self.u2.app_current()['package']
+
+
 def implement(self):
     if not self.is_android_device:
         return True
-    cur_package = self.u2.app_current()['package']
+    cur_package = _get_current_package(self)
     if cur_package != self.package_name:
-        if cur_package != self.package_name:
-            self.logger.warning("APP NOT RUNNING current package: " + cur_package)
+        self.logger.warning("APP NOT RUNNING current package: " + cur_package)
         start(self)
         return True
     self.logger.info("CHECK RESTART")
@@ -17,17 +23,26 @@ def implement(self):
         self.logger.info("--STOP CURRENT BLUE ARCHIVE--")
         self.u2.app_stop(self.package_name)
         time.sleep(2)
-        start(self)
+        start(self, recreate_virtual_scrcpy=True)
         return True
     return True
 
 
-def start(self):
+def start(self, recreate_virtual_scrcpy=False):
     self.logger.info("-- START BLUE ARCHIVE --")
     activity_name = self.activity_name
-    if self.server == 'CN':
+    if self.server == 'CN' and self.config.screenshot_method != 'virtual_scrcpy':
         activity_name = None
-    self.u2.app_start(self.package_name, activity_name)
+    if self.config.screenshot_method == "virtual_scrcpy":
+        from core.device.virtual_scrcpy_client import VirtualScrcpyClient
+        if recreate_virtual_scrcpy:
+            self.logger.info("Recreate virtual_scrcpy session before app start")
+            cli = VirtualScrcpyClient.recreate_instance(self.serial)
+        else:
+            cli = VirtualScrcpyClient.get_instance(self.serial)
+        cli.launch_app(self.package_name, activity_name)
+    else:
+        self.u2.app_start(self.package_name, activity_name)
     self.to_main_page()
 
 
