@@ -111,7 +111,7 @@ def screenshot_thread(self, delay):
         self.latest_img_array = self.u2_get_screenshot()
     else:
         self.update_screenshot_array()
-    cv2.imwrite("cafe_reward_shot.png", self.latest_img_array)
+        cv2.imwrite("cafe_reward_shot.png", self.latest_img_array)
 
 def gift_to_cafe(self):
     rgb_possibles = {"gift": (1240, 574)}
