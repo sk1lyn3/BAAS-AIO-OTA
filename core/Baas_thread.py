@@ -820,15 +820,18 @@ class Baas_thread:
             }
             region = region[self.server]
         previous_max = self.config_set.config.ap.get("max", -1)
+        if previous_max > 240:
+            # An earlier misread above the level 90 cap must not block valid readings.
+            previous_max = -1
         for attempt in range(2):
             ocr_res = self.ocr.get_region_res(
                 self, region, "en-us", "AP", "0123456789/"
             )
             try:
                 count, maximum = (int(value) for value in ocr_res.split('/'))
-                # AP can overflow its cap, but the cap starts at 24 and never
-                # decreases for the same account. Do not save truncated readings.
-                if (0 <= count <= 999 and 24 <= maximum <= 999
+                # AP can overflow its cap, but the cap is 24 to 240 and never
+                # decreases for the same account. Do not save misreadings.
+                if (0 <= count <= 999 and 24 <= maximum <= 240
                         and maximum >= previous_max):
                     self.config_set.set("ap", {
                         "count": count, "max": maximum, "time": time.time()
