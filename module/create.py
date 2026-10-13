@@ -518,7 +518,7 @@ def item_order_list_builder(self, phase, filter_list, sort_type, sort_direction)
         if sort_type == "count":
             t = []
             for itm in temp:
-                t.append([itm, self.config.create_item_holding_quantity[itm]])
+                t.append([itm, self.config.create_item_holding_quantity.get(itm, 0)])
             t.sort(key=lambda x: x[1])
             temp = [x[0] for x in t]
 
@@ -540,7 +540,7 @@ def item_order_list_builder(self, phase, filter_list, sort_type, sort_direction)
     if sort_type == "count":
         t = []
         for itm in temp:
-            t.append([itm, self.config.create_item_holding_quantity[itm]])
+            t.append([itm, self.config.create_item_holding_quantity.get(itm, 0)])
         t.sort(key=lambda x: x[1])
         temp = [x[0] for x in t]
     if sort_direction == "down":
@@ -588,8 +588,8 @@ class CreateItemCheckState:
         self.select_item_func_list = {
             "default": [
                 self.phase1_default_select_item,
-                None,
-                None
+                (self.select_levels, "primary"),
+                (self.select_levels, "advanced")
             ],
             "primary": [
                 None,
@@ -706,7 +706,10 @@ class CreateItemCheckState:
         self.last_check_y -= dy
 
     def try_choose_item(self):
-        func = self.select_item_func_list[self.select_item_rule][self.phase - 1]
+        rule = self.select_item_rule if self.select_item_rule in self.select_item_func_list else "default"
+        func = self.select_item_func_list[rule][self.phase - 1]
+        if func is None:
+            return False
         if type(func) is tuple:
             return func[0](func[1])
         else:
@@ -816,6 +819,8 @@ def swipe_item_list_get_y_diff(self, item_lines_y):
     self.swipe(690, 511, 690, 348, duration=0.05, post_sleep_time=1)
     self.update_screenshot_array()
     position = image.search_image_in_area(self, tar_img, area=(713 - 10, 122, 1247 + 10, 482), threshold=0.8)
+    if not position:
+        return 0
     return area[1] - position[1]
 
 
