@@ -98,6 +98,8 @@ class Baas_thread:
         self.logger = utils.Logger(logger_signal)
         self.last_refresh_u2_time = 0
         self.latest_img_array = None
+        self.global_delayed_news_checked = False
+        self.global_delayed_news_attempts = 0
         self.total_assault_difficulty_names = ["NORMAL", "HARD", "VERYHARD", "HARDCORE", "EXTREME", "INSANE", "TORMENT"]
         self.button_signal = button_signal
         self.update_signal = update_signal
@@ -696,8 +698,53 @@ class Baas_thread:
             'reward_acquired': (640, 100),
             # "fighting_feature": (1226, 51)
         }
-        picture.co_detect(self, ["main_page"], rgb_possibles, None, img_reactions, skip_first_screenshot,
-                          tentative_click=True)
+        ret = picture.co_detect(self, ["main_page"], rgb_possibles, None, img_reactions, skip_first_screenshot,
+                                tentative_click=True)
+        if ret == "main_page" and self.close_delayed_global_news():
+            picture.co_detect(self, ["main_page"], rgb_possibles, None, img_reactions, False,
+                              tentative_click=True)
+
+    def close_delayed_global_news(self):
+        if self.server != "Global" or self.global_delayed_news_checked:
+            return False
+        if self.global_delayed_news_attempts >= 4:
+            return False
+
+        for _ in range(4 - self.global_delayed_news_attempts):
+            self.global_delayed_news_attempts += 1
+            time.sleep(0.75)
+            self.update_screenshot_array()
+            if not self.global_news_close_button_visible():
+                continue
+            self.global_delayed_news_checked = True
+            x, y = 1213, 42
+            self.logger.info(
+                f"Delayed Global news close attempt {self.global_delayed_news_attempts} -> Click @ ({x},{y})"
+            )
+            self.click(x, y)
+            return True
+        return False
+
+    def global_news_close_button_visible(self):
+        if self.latest_img_array is None:
+            return False
+        img = self.latest_img_array
+        ratio = self.ratio
+        y1, y2 = int(20 * ratio), int(70 * ratio)
+        x1, x2 = int(1190 * ratio), int(1245 * ratio)
+        if y2 > img.shape[0] or x2 > img.shape[1]:
+            return False
+        close_area = img[y1:y2, x1:x2]
+        if close_area.size == 0 or float(np.mean(close_area)) >= 95:
+            return False
+        x_marks = [(1206, 31), (1216, 42), (1227, 54), (1227, 31), (1222, 36), (1211, 49)]
+        for x, y in x_marks:
+            sx, sy = int(x * ratio), int(y * ratio)
+            if sy >= img.shape[0] or sx >= img.shape[1]:
+                return False
+            if float(np.mean(img[sy, sx])) < 125:
+                return False
+        return True
 
     def init_image_resource(self):
         return position.init_image_data(self)
@@ -772,31 +819,28 @@ class Baas_thread:
                 'JP': (502, 13, 612, 33)
             }
             region = region[self.server]
-        ocr_res = self.ocr.get_region_res(
-            self,
-            region,
-            "en-us",
-            "AP",
-            "0123456789/"
-        )
-        _max = -1
-        if '/' in ocr_res:
-            ocr_res = ocr_res.split('/')
-            _max = ocr_res[1]
-            ocr_res = ocr_res[0]
-        try:
-            ocr_res = int(ocr_res)
-            _max = int(_max)
-            if ocr_res <= 999 and _max <= 999:
-                data = {
-                    "count": ocr_res,
-                    "max": _max,
-                    "time": time.time()
-                }
-                self.config_set.set("ap", data)
-                return ocr_res
-        except ValueError:
-            pass
+        previous_max = self.config_set.config.ap.get("max", -1)
+        for attempt in range(2):
+            ocr_res = self.ocr.get_region_res(
+                self, region, "en-us", "AP", "0123456789/"
+            )
+            try:
+                count, maximum = (int(value) for value in ocr_res.split('/'))
+                # AP can overflow its cap, but the cap starts at 24 and never
+                # decreases for the same account. Do not save truncated readings.
+                if (0 <= count <= 999 and 24 <= maximum <= 999
+                        and maximum >= previous_max):
+                    self.config_set.set("ap", {
+                        "count": count, "max": maximum, "time": time.time()
+                    })
+                    return count
+            except ValueError:
+                pass
+            if attempt == 0:
+                self.logger.warning(f"Suspicious AP reading: {ocr_res!r}; retrying once.")
+                self.update_screenshot_array()
+                # Leave extra room for the last digits on the retry crop.
+                region = (region[0], region[1], region[2] + 16, region[3])
 
         self.logger.warning("Failed to get AP.")
         return 999
@@ -838,7 +882,7 @@ class Baas_thread:
     def get_creditpoints(self, is_main_page=False):
         if is_main_page:
             region = {
-                'CN': (699, 20, 832, 52),
+                'CN': (671, 20, 832, 52),
                 'Global': (671, 20, 819, 52),
                 'JP': (700, 26, 847, 44)
             }
