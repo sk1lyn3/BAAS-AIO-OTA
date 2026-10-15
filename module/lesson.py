@@ -1,7 +1,7 @@
 import time
 
 from core import color, picture, image
-from core.lesson_students import detect_students, resolve_student
+from core.lesson_students import detect_students, load_students, resolve_student
 from core.geometry.parallelogram import Parallelogram
 from core.utils import build_possible_string_dict_and_length, most_similar_string, purchase_ticket_times_to_int
 
@@ -28,6 +28,9 @@ def implement(self):
             return True
     to_select_location(self, True)
     cur_num = get_lesson_region_num(self)
+    if not isinstance(cur_num, int):
+        self.logger.warning('Cannot locate the lesson region; skip remaining lessons this run')
+        return True
     for k in range(0, len(self.lesson_times)):
         if self.lesson_times[k] == 0:
             continue
@@ -115,7 +118,8 @@ def to_lesson_region(self, tar_num, cur_num=0, strict=False, region_order=None):
             cur_num = res
         else:
             if strict:
-                raise RuntimeError('Cannot verify the target lesson region')
+                self.logger.warning('Cannot verify the target lesson region; stop specified student lookup')
+                return 'NOT FOUND'
             self.logger.warning("fail to find region name, use last region name")
             cur_num = tar_num
     self.logger.info("Reach lesson page [ " + region_name[cur_num] + " ]")
@@ -461,6 +465,10 @@ def invite_favor_student(self):
         Search lesson locations using shared student portrait templates.
     """
     self.logger.info("Lesson Inviting favor student.")
+    templates, _, heart = load_students()
+    if not templates or heart is None:
+        self.logger.warning('Specified student assets unavailable; continue with ordinary lessons')
+        return
     configured_names = self.config.lesson_favorStudent.copy()
     favorStudentList = []
     for name in configured_names:
@@ -477,8 +485,9 @@ def invite_favor_student(self):
         return
     to_select_location(self, True)
     start_num = get_lesson_region_num(self)
-    if start_num == 'NOT FOUND':
-        raise RuntimeError('Cannot locate the current lesson region')
+    if not isinstance(start_num, int):
+        self.logger.warning('Cannot locate the current lesson region; stop specified student lookup')
+        return
     cur_num = start_num
     region_order = []
     tar_stu = favorStudentList[0]
@@ -524,12 +533,14 @@ def invite_favor_student(self):
                     return True
         to_select_location(self, True)
         cur_num = switch_lesson_region_page(self, to_left_page=False, cur_num=cur_num)
-        if cur_num == 'NOT FOUND':
-            raise RuntimeError('Cannot locate the lesson region after switching')
+        if not isinstance(cur_num, int):
+            self.logger.warning('Cannot locate the lesson region after switching; stop specified student lookup')
+            return
         if cur_num == start_num:  # checked a round
             break
         if cur_num in region_order:
-            raise RuntimeError('Unexpected lesson region loop while scanning')
+            self.logger.warning('Unexpected lesson region loop; stop specified student lookup')
+            return
     for student in favorStudentList[1:]:
         self.logger.info("Target Student : " + student)
         if student not in detected_student_pos:
@@ -544,6 +555,8 @@ def invite_favor_student(self):
                 min(lesson_region_distances(cur_num, location[0], region_order)),
                 location[0], location[1]))
             cur_num = to_lesson_region(self, region, cur_num, strict=True, region_order=region_order)
+            if not isinstance(cur_num, int):
+                return
             to_all_locations(self, True)
             t = execute_lesson(self, lesson_id)
             if t == "inadequate_ticket":

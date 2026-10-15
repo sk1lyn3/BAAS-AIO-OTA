@@ -1,5 +1,7 @@
 """Schedule portrait matching; all coordinates and assets use 1280 x 720."""
 import csv
+import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 import unicodedata
@@ -22,32 +24,49 @@ def normalize_name(name):
 
 @lru_cache(maxsize=1)
 def load_students():
-    with (ASSET_DIR / 'mapping.csv').open(encoding='utf-8-sig', newline='') as f:
-        rows = list(csv.DictReader(f))
+    logger = logging.getLogger(__name__)
+    try:
+        with (ASSET_DIR / 'mapping.csv').open(encoding='utf-8-sig', newline='') as f:
+            rows = list(csv.DictReader(f))
+    except OSError as error:
+        logger.warning('Lesson student mapping unavailable: %s', error)
+        return {}, {}, None
     templates, aliases = {}, {}
     for row in rows:
         portrait_id = row['id']
         student_id = STUDENT_FORMS.get(portrait_id, portrait_id)
         template = cv2.imread(str(ASSET_DIR / (portrait_id + '.png')))
         if template is None:
-            raise RuntimeError('Missing lesson portrait: ' + student_id)
+            logger.warning('Skipping missing lesson portrait: %s', portrait_id)
+            continue
         templates[portrait_id] = template
         for value in row.values():
             if value:
                 name = normalize_name(value)
                 if aliases.setdefault(name, student_id) != student_id:
                     aliases[name] = None  # Ambiguous names require an explicit ID.
-    # Existing BAAS defaults use this English display name, not the dev name CH0200.
-    if '10066' in templates:
-        aliases[normalize_name('Aris (Maid)')] = '10066'
     heart = cv2.imread(str(ASSET_DIR / 'heart.png'), cv2.IMREAD_UNCHANGED)
-    if heart is None:
-        raise RuntimeError('Missing lesson heart overlay')
+    if heart is None or heart.shape != (27, 29, 4):
+        logger.warning('Lesson heart overlay missing or invalid; specified students disabled')
+        return {}, {}, None
     return templates, aliases, heart
 
 
+@lru_cache(maxsize=1)
+def english_student_names():
+    from core.config.default_config import STATIC_DEFAULT_CONFIG
+    return {normalize_name(row['Global_name']): normalize_name(row['JP_name'])
+            for row in json.loads(STATIC_DEFAULT_CONFIG)['student_names']
+            if row.get('Global_name') and row.get('JP_name')}
+
+
 def resolve_student(name):
-    return load_students()[1].get(normalize_name(name))
+    aliases = load_students()[1]
+    name = normalize_name(name)
+    if name in aliases:
+        return aliases[name]
+    # English names are only a compatibility layer; the portrait mapping stays authoritative.
+    return aliases.get(english_student_names().get(name))
 
 
 def detect_students(frame, region, relationship_count):
@@ -55,6 +74,8 @@ def detect_students(frame, region, relationship_count):
     if relationship_count <= 0:
         return []
     templates, _, heart = load_students()
+    if not templates or heart is None:
+        return []
     x, y, right, bottom = region
     # Copy only this block: other recognition and failure screenshots stay intact.
     area = frame[y:bottom, x:right].copy()
@@ -81,7 +102,7 @@ def detect_students(frame, region, relationship_count):
                 candidates[student_id] = (score, student_id, portrait_id, pos)
         ranking = sorted(candidates.values(), reverse=True)
         score, student_id, portrait_id, (px, py) = ranking[0]
-        if score < 0.75 or score - ranking[1][0] < 0.1:
+        if score < 0.75 or (len(ranking) > 1 and score - ranking[1][0] < 0.1):
             continue
         template = templates[portrait_id]
         th, tw = template.shape[:2]
