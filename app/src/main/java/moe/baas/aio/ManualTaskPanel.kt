@@ -45,8 +45,8 @@ class ManualTaskPanel(
     private companion object { @Volatile var activities: JSONObject? = null }
     private fun loadActivity(server: String): JSONObject? {
         val mode = when (server) { "日服" -> "JP"; "官服", "B服" -> "CN"; else -> "Global" }
-        // Parsed once per process: the asset is immutable and the panel is rebuilt on every page render.
-        val all = activities ?: host.assets.open("activities-info.json").bufferedReader().use { JSONObject(it.readText()) }.also { activities = it }
+        // Parsed once per process: the core is fixed per process and the panel is rebuilt on every page render.
+        val all = activities ?: JSONObject(CoreData.read(host, "activities-info.json")).also { activities = it }
         return all.optJSONObject(mode)
     }
 

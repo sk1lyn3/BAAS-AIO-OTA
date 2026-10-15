@@ -216,6 +216,11 @@ class HomeActivity : PreviewActivity() {
         ManagedMode.attach(this)
         LiveTask.start()
         store.initialize(); page = state?.getString("page") ?: "主页"
+        if (state == null) CoreUpdater.testPending(this) { passed, error ->
+            if (passed) UiNotice.show(this, "core 已更新")
+            else if (!isFinishing && !isDestroyed) UiTheme.dialog(this).setTitle("更新未生效").setMessage(error ?: "新版本无法在当前应用上运行，已退回上一个版本")
+                .setPositiveButton("重新启动") { _, _ -> safely { CoreUpdater.restart(this) } }.setCancelable(false).show()
+        }
         restoredSettings = state?.getBundle("settingsPanels")
         exportingFailureFrame = state?.getString("exportingFailureFrame")
         restoredSecondaryPages = state?.getBundle("secondaryPages")
@@ -1154,6 +1159,8 @@ class HomeActivity : PreviewActivity() {
             }
         }
         if (BuildConfig.DEBUG) SettingsCard("开发诊断", Modifier.homeItem()) { safely { startActivity(Intent().setClassName(this, "$packageName.MainActivity")) } }
+        val core = remember { runCatching { CoreUpdater.status(this) }.getOrNull() }
+        SettingsCard("更新", Modifier.homeItem(), core?.let { CoreUpdateDialog.version(it.commit, it.commitTime) }) { safely { CoreUpdateDialog.show(this) } }
         SettingsCard("关于", Modifier.homeItem()) { safely { AboutDialog.show(this) } }
     }
 

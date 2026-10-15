@@ -1,0 +1,9 @@
+{
+  "keys": [
+    {
+      "id": "test-2026",
+      "algorithm": "SHA256withECDSA",
+      "publicKeyDerBase64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAExFwGkD8Zi+pmMya3WjDIxhNXbW28P/Bo2DzB+OjGhRHXGDJVNjMnzlykjDQYd/5x7hGDkQGE7kl0u5cDW79egQ=="
+    }
+  ]
+}

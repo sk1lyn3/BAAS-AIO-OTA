@@ -16,6 +16,12 @@ android {
         versionCode = 10102
         versionName = "1.1.2"
         ndk { abiFilters += "arm64-v8a" }
+        // One coreApi value, defined by the Python glue that depends on the core.
+        val coreApi = Regex("^CORE_API = (\\d+)$", RegexOption.MULTILINE)
+            .find(file("src/main/python/core_loader.py").readText())!!.groupValues[1]
+        buildConfigField("int", "CORE_API", coreApi)
+        buildConfigField("String", "CORE_CHANNEL_URL",
+            "\"https://github.com/sk1lyn3/BAAS-AIO/releases/download/core-channel/stable.json\"")
     }
 
     compileOptions {

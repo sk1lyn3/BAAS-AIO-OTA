@@ -7,8 +7,8 @@ import org.json.JSONObject
 /** UI field names and choices follow WebUI; values retain upstream config.json types. */
 class ConfigCatalog(context: Context) {
     val groups = context.assets.open("config-catalog.json").bufferedReader().use { JSONArray(it.readText()) }
-    val defaults = context.assets.open("profile-defaults.json").bufferedReader().use { JSONObject(it.readText()).getJSONObject("config") }
-    val static = context.assets.open("static-config.json").bufferedReader().use { JSONObject(it.readText()) }
+    val defaults = JSONObject(CoreData.read(context, "profile-defaults.json")).getJSONObject("config")
+    val static = JSONObject(CoreData.read(context, "static-config.json"))
     fun fields(): List<JSONObject> = (0 until groups.length()).flatMap { i ->
         val fields = groups.getJSONObject(i).getJSONArray("fields")
         (0 until fields.length()).map { fields.getJSONObject(it) }
