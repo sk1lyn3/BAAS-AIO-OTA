@@ -23,14 +23,19 @@ def normalize_name(name):
 
 
 @lru_cache(maxsize=1)
-def load_students():
-    logger = logging.getLogger(__name__)
+def student_mapping_rows():
     try:
         with (ASSET_DIR / 'mapping.csv').open(encoding='utf-8-sig', newline='') as f:
-            rows = list(csv.DictReader(f))
+            return list(csv.DictReader(f))
     except OSError as error:
-        logger.warning('Lesson student mapping unavailable: %s', error)
-        return {}, {}, None
+        logging.getLogger(__name__).warning('Lesson student mapping unavailable: %s', error)
+        return []
+
+
+@lru_cache(maxsize=1)
+def load_students():
+    logger = logging.getLogger(__name__)
+    rows = student_mapping_rows()
     templates, aliases = {}, {}
     for row in rows:
         portrait_id = row['id']
@@ -67,6 +72,12 @@ def resolve_student(name):
         return aliases[name]
     # English names are only a compatibility layer; the portrait mapping stays authoritative.
     return aliases.get(english_student_names().get(name))
+
+
+@lru_cache(maxsize=1)
+def student_display_names():
+    return {STUDENT_FORMS.get(row['id'], row['id']): row['cn_name'] or row['jp_name'] or row['id']
+            for row in student_mapping_rows()}
 
 
 def detect_students(frame, region, relationship_count):

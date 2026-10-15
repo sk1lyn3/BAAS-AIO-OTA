@@ -1,7 +1,7 @@
 import time
 
 from core import color, picture, image
-from core.lesson_students import detect_students, load_students, resolve_student
+from core.lesson_students import detect_students, load_students, resolve_student, student_display_names
 from core.geometry.parallelogram import Parallelogram
 from core.utils import build_possible_string_dict_and_length, most_similar_string, purchase_ticket_times_to_int
 
@@ -470,6 +470,7 @@ def invite_favor_student(self):
         self.logger.warning('Specified student assets unavailable; continue with ordinary lessons')
         return
     configured_names = self.config.lesson_favorStudent.copy()
+    display_names = student_display_names().copy()
     favorStudentList = []
     for name in configured_names:
         student_id = resolve_student(name)
@@ -477,6 +478,7 @@ def invite_favor_student(self):
             self.logger.warning("Unknown or ambiguous lesson student: " + str(name) + "; use a mapped name or student ID")
         elif student_id not in favorStudentList:
             favorStudentList.append(student_id)
+            display_names[student_id] = str(name)
 
     detected_student_pos = {}  # student ID : {(region, block)}
     target_ids = set(favorStudentList)
@@ -491,7 +493,7 @@ def invite_favor_student(self):
     cur_num = start_num
     region_order = []
     tar_stu = favorStudentList[0]
-    self.logger.info("Target Student : [ " + tar_stu + " ]")
+    self.logger.info("Target Student : [ " + display_names[tar_stu] + " ]")
     # the first student will search a round, all detected data during this round are stored in detected_student_pos
     while self.flag_run:
         region_order.append(cur_num)
@@ -509,9 +511,9 @@ def invite_favor_student(self):
                 block_names = detect_students(frame, region, res[1][j])
                 if not block_names:
                     continue
-                self.logger.info("Block " + str(j + 1) + " : " + ", ".join(block_names))
+                self.logger.info("Block " + str(j + 1) + " : " + ", ".join(display_names.get(name, name) for name in block_names))
                 if tar_stu in block_names:
-                    self.logger.info("Find [ " + tar_stu + " ] in Block.")
+                    self.logger.info("Find [ " + display_names[tar_stu] + " ] in Block.")
                     lesson_need_to_execute = j
                 else:
                     for name in block_names:
@@ -542,9 +544,9 @@ def invite_favor_student(self):
             self.logger.warning('Unexpected lesson region loop; stop specified student lookup')
             return
     for student in favorStudentList[1:]:
-        self.logger.info("Target Student : " + student)
+        self.logger.info("Target Student : " + display_names[student])
         if student not in detected_student_pos:
-            self.logger.warning("Didn't find [ " + student + " ] in any lesson regions.Skip")
+            self.logger.warning("Didn't find [ " + display_names[student] + " ] in any lesson regions.Skip")
             continue
         self.logger.info("Recorded Position(s) : " + str(detected_student_pos[student]))
         while self.flag_run:
