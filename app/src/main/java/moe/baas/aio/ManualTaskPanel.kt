@@ -44,7 +44,7 @@ class ManualTaskPanel(
     init { if (section == "活动图") activityInfo = loadActivity(selected.server) }
     private companion object { @Volatile var activities: JSONObject? = null }
     private fun loadActivity(server: String): JSONObject? {
-        val mode = when (server) { "日服" -> "JP"; "官服", "B服" -> "CN"; else -> "Global" }
+        val mode = GameServer.mode(server)
         // Parsed once per process: the core is fixed per process and the panel is rebuilt on every page render.
         val all = activities ?: JSONObject(CoreData.read(host, "activities-info.json")).also { activities = it }
         return all.optJSONObject(mode)

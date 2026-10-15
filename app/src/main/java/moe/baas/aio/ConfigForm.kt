@@ -261,7 +261,7 @@ class ConfigForm(private val context: Context, val profileId: String, state: Bun
         val fallback = if (field.getString("key").startsWith("Tactical")) "战术币" else "信用点"
         ShopPicker.show(context, field.getString("label"), goods, value, fallback) { safely { set(field, it) } }
     }
-    private fun serverMode() = when (store.get(profileId).server) { "日服", "日服PC端" -> "JP"; "官服", "B服" -> "CN"; else -> "Global" }
+    private fun serverMode() = GameServer.mode(store.get(profileId).server)
 
     /** side/preset_team_attribute: list of groups, each a list of attribute values; tap a slot to choose. */
     private fun editTeams(field: JSONObject, value: JSONArray) {
