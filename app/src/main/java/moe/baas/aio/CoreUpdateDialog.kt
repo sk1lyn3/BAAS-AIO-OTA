@@ -19,7 +19,7 @@ import moe.baas.aio.UiTheme.item
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Settings entry for downloaded BAAS cores: version, manual check, rollback. */
+/** Settings entry for downloaded BAAS cores: version, manual check, restore built-in. */
 object CoreUpdateDialog {
     /** core-<sha7> · <commit date>. */
     fun version(commit: String, commitTime: String) = "core-${commit.take(7)}" + if (commitTime.isNotEmpty()) " · ${commitTime.take(10)}" else ""
@@ -53,7 +53,6 @@ object CoreUpdateDialog {
         }, LinearLayout.LayoutParams(-1, -2).apply {
             val gap = UiTheme.dp(activity, 3); setMargins(gap, UiTheme.dp(activity, 6), gap, 0)
         })
-        action("退回上一个版本", status.canRollBack) { confirmRestart(activity, "退回上一个版本") { CoreUpdater.rollback(activity) } }
         action("恢复内置版本", status.external || status.pending) { confirmRestart(activity, "恢复内置版本") { CoreUpdater.restoreBundled(activity) } }
         val dialog = UiTheme.dialog(activity).setTitle("更新")
             .setView(ScrollView(activity).apply { addView(content) })

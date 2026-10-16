@@ -1,8 +1,6 @@
 package moe.baas.aio
 
 import android.app.Activity
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import com.chaquo.python.Python
@@ -44,19 +42,17 @@ object CoreUpdater {
         CoreBundle.reconcile(root(context), BuildConfig.CORE_API, bundled(context), versionCode(context))
     }
 
-    data class Status(val commit: String, val commitTime: String, val external: Boolean, val canRollBack: Boolean, val pending: Boolean, val error: String?)
+    data class Status(val commit: String, val commitTime: String, val external: Boolean, val pending: Boolean, val error: String?)
 
     fun status(context: Context): Status {
         val root = root(context); val state = CoreBundle.readState(root)
         val id = CoreBundle.effective(root); val manifest = CoreBundle.manifest(root, id)
         val core = manifest?.getJSONObject("core")
         val bundled = bundled(context)
-        val previous = CoreBundle.id(state, "previous")
         return Status(
             core?.getString("commit") ?: bundled.getString("head"),
             core?.getString("commitTime") ?: bundled.getString("commitTime"),
             manifest != null,
-            previous != null && previous != id && previous != (CoreBundle.id(state, "active") ?: CoreBundle.BUNDLED),
             CoreBundle.id(state, "pending") != null,
             CoreBundle.id(state, "lastError"))
     }
@@ -124,7 +120,6 @@ object CoreUpdater {
         } finally { zip.parentFile?.deleteRecursively() }
     }
 
-    fun rollback(context: Context) { check(idle) { "请等待当前任务结束" }; CoreBundle.rollback(root(context)) }
     fun restoreBundled(context: Context) { check(idle) { "请等待当前任务结束" }; CoreBundle.restoreBundled(root(context)) }
 
     /**
@@ -147,13 +142,12 @@ object CoreUpdater {
         }
     }
 
-    /** Python and Kotlin both lock their core choice per process, so a change applies in a fresh process. */
+    /**
+     * Python and Kotlin both lock their core choice per process, so a change applies in a fresh process.
+     * RestartActivity, in its own process, ends this one and opens the app again.
+     */
     fun restart(activity: Activity) {
-        val intent = Intent(activity, HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        val pending = PendingIntent.getActivity(activity, 7301, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_CANCEL_CURRENT)
-        val at = System.currentTimeMillis() + 800
-        activity.getSystemService(AlarmManager::class.java).setAlarmClock(AlarmManager.AlarmClockInfo(at, pending), pending)
-        activity.finishAffinity()
-        android.os.Process.killProcess(android.os.Process.myPid())
+        activity.startActivity(Intent(activity, RestartActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(RestartActivity.PID, android.os.Process.myPid()))
     }
 }

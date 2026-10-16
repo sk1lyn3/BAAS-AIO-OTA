@@ -14,7 +14,7 @@ import java.util.zip.ZipFile
 
 /**
  * Signed BAAS core packages under files/core: verification, installation and the state shared with
- * core_loader.py. Free of Android UI so the install and rollback rules can run on a plain JVM.
+ * core_loader.py. Free of Android UI so the install and restore rules can run on a plain JVM.
  */
 object CoreBundle {
     const val BUNDLED = "bundled"
@@ -164,41 +164,34 @@ object CoreBundle {
 
     /**
      * Drop downloaded cores this APK cannot use: missing, different coreApi, or not newer than the built-in
-     * snapshot (e.g. after an APK upgrade that ships a newer core).
+     * snapshot (e.g. after an APK upgrade that ships a newer core). Also deletes packages the state no longer
+     * names, such as the one a self-tested update replaced.
      */
     fun reconcile(root: File, coreApi: Int, bundled: JSONObject, versionCode: Long) {
         val state = readState(root); var changed = false
         fun usable(id: String) = manifest(root, id)?.let { it.optInt("coreApi") == coreApi && supports(it, versionCode) && it.getJSONObject("core").let { core ->
             newer(core.getString("commit"), core.getString("commitTime"), bundled.getString("head"), bundled.getString("commitTime")) } } == true
-        for (key in listOf("pending", "active", "previous")) {
+        for (key in listOf("pending", "active")) {
             val id = id(state, key) ?: continue
             if (id == BUNDLED || usable(id)) continue
             if (key == "active") state.put("active", BUNDLED) else state.put(key, JSONObject.NULL)
-            if (key != "previous") state.put("lastError", "已下载的版本不适用于当前应用，已改用内置版本")
+            state.put("lastError", "已下载的版本不适用于当前应用，已改用内置版本")
             changed = true
         }
-        if (changed) { writeState(root, state); prune(root, state) }
+        if (changed) writeState(root, state)
+        prune(root, state)
     }
 
-    fun rollback(root: File) {
-        val state = readState(root)
-        val previous = id(state, "previous") ?: throw Rejected("没有可以退回的版本")
-        state.put("active", previous).put("previous", JSONObject.NULL).put("pending", JSONObject.NULL)
-            .put("bootAttempts", 0).put("lastError", JSONObject.NULL)
-        writeState(root, state); prune(root, state)
-    }
-
+    /** Back to the APK's core; every downloaded package is deleted. */
     fun restoreBundled(root: File) {
         val state = readState(root)
-        val active = id(state, "active") ?: BUNDLED
         state.put("active", BUNDLED).put("pending", JSONObject.NULL).put("bootAttempts", 0).put("lastError", JSONObject.NULL)
-        if (active != BUNDLED) state.put("previous", active)
         writeState(root, state); prune(root, state)
     }
 
     /** Keep only the packages the state still refers to. */
     fun prune(root: File, state: JSONObject) {
-        val keep = listOf("active", "previous", "pending").mapNotNull { id(state, it) }.toSet()
+        val keep = listOf("active", "pending").mapNotNull { id(state, it) }.toSet()
         File(root, "ext").listFiles().orEmpty().filter { it.name !in keep }.forEach { it.deleteRecursively() }
     }
 

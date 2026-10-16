@@ -150,8 +150,6 @@ def _select(files_dir):
                 write_state(files_dir, state)
             else:
                 state = read_state(files_dir)
-                if state.get("active") != pending:
-                    state["previous"] = state.get("active") or BUNDLED
                 state.update(active=pending, pending=None, bootAttempts=0, lastError=None, lastErrorDetail=None)
                 write_state(files_dir, state)
                 return selected

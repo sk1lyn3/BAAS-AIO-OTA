@@ -45,5 +45,7 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-initiated local BAAS automation" />
         </service>
         <service android:name=".OcrService" android:exported="false" android:process=":ocr" />
+        <activity android:name=".RestartActivity" android:exported="false" android:process=":restart"
+            android:excludeFromRecents="true" android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>
