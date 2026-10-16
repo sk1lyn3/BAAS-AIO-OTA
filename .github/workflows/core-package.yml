@@ -1,0 +1,144 @@
+name: Publish core package
+run-name: core ${{ inputs.core_ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      core_repository:
+        description: 'Core repository (owner/repo)'
+        required: true
+        default: sk1lyn3/blue_archive_auto_script
+        type: string
+      core_ref:
+        description: 'Core commit or branch to package'
+        required: true
+        type: string
+      aio_ref:
+        description: 'AIO branch or commit in this repository whose builder and catalog are used'
+        required: true
+        default: aio
+        type: string
+      notes:
+        description: 'Update notes shown in the app'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: core-channel
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.aio_ref }}
+          path: aio
+          persist-credentials: false
+      - name: Fetch core
+        id: core
+        env:
+          CORE_REPOSITORY: ${{ inputs.core_repository }}
+          CORE_REF: ${{ inputs.core_ref }}
+        run: |
+          [[ "$CORE_REPOSITORY" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]
+          git init -q core
+          git -C core fetch --depth=1 -- "https://github.com/$CORE_REPOSITORY.git" "$CORE_REF"
+          sha=$(git -C core rev-parse FETCH_HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tag=core-${sha:0:7}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Load the current channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out
+          if gh release view core-channel --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release download core-channel --repo "$GITHUB_REPOSITORY" --pattern stable.json --dir out
+          fi
+      - name: Build and sign package
+        env:
+          SIGNING_KEY: ${{ secrets.CORE_BUNDLE_SIGNING_KEY }}
+          CORE_SHA: ${{ steps.core.outputs.sha }}
+          TAG: ${{ steps.core.outputs.tag }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          : "${SIGNING_KEY:?Configure CORE_BUNDLE_SIGNING_KEY}"
+          key="$RUNNER_TEMP/core-signing.pem"
+          trap 'rm -f -- "$key"' EXIT
+          (umask 077; printf '%s\n' "$SIGNING_KEY" > "$key")
+          version_code=$(sed -n 's/^[[:space:]]*versionCode = \([0-9]*\).*/\1/p' aio/app/build.gradle.kts)
+          python3 aio/tools/prepare_core_bundle.py --baas core --revision "$CORE_SHA" --channel stable \
+            --notes "$NOTES" --key "$key" --output out --min-version-code "$version_code" \
+            --url-base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+      - name: Verify against the key the app trusts
+        env:
+          CORE_SHA: ${{ steps.core.outputs.sha }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, subprocess, tempfile, zipfile
+          keys = json.loads(pathlib.Path('aio/app/src/main/res/raw/core_bundle_keys.json').read_text())['keys']
+          pems = []
+          for key in keys:
+              der = base64.b64decode(key['publicKeyDerBase64'])
+              body = base64.encodebytes(der).decode()
+              pem = tempfile.NamedTemporaryFile('w', suffix='.pem', delete=False)
+              pem.write('-----BEGIN PUBLIC KEY-----\n' + body + '-----END PUBLIC KEY-----\n'); pem.close()
+              pems.append(pem.name)
+          def verify(payload, signature):
+              with tempfile.NamedTemporaryFile() as data, tempfile.NamedTemporaryFile() as sig:
+                  data.write(payload); data.flush(); sig.write(signature); sig.flush()
+                  assert any(subprocess.run(['openssl', 'dgst', '-sha256', '-verify', p, '-signature', sig.name, data.name],
+                                            capture_output=True).returncode == 0 for p in pems), 'signature not trusted by the app'
+          out = pathlib.Path('out')
+          channel = (out / 'stable.json').read_bytes()
+          verify(channel, (out / 'stable.json.sig').read_bytes())
+          entry = next(p for p in json.loads(channel)['packages'] if p['commit'] == os.environ['CORE_SHA'])
+          name = entry['url'].rsplit('/', 1)[1]
+          body = (out / name).read_bytes()
+          assert hashlib.sha256(body).hexdigest() == entry['zipSha256'] and len(body) == entry['size']
+          with zipfile.ZipFile(out / name) as archive:
+              verify(archive.read('bundle-manifest.json'), archive.read('bundle-manifest.json.sig'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('```json\n' + json.dumps(entry, ensure_ascii=False, indent=2) + '\n```\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'PACKAGE={name}\n')
+          PY
+      - name: Publish package, then point the channel at it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.core.outputs.tag }}
+          CORE_SHA: ${{ steps.core.outputs.sha }}
+          CORE_REPOSITORY: ${{ inputs.core_repository }}
+        run: |
+          python3 - > "$RUNNER_TEMP/notes.md" <<'PY'
+          import json, os
+          entry = next(p for p in json.load(open('out/stable.json'))['packages'] if p['commit'] == os.environ['CORE_SHA'])
+          print(f"core 更新包 `core-{entry['commit'][:7]}`，来自 `{os.environ['CORE_REPOSITORY']}`。\n")
+          print(f"- 提交：`{entry['commit']}`")
+          print(f"- 提交时间：{entry['commitTime']}")
+          print(f"- coreApi：{entry['coreApi']}")
+          print(f"- 大小：{entry['size']} 字节")
+          print(f"- SHA-256：`{entry['zipSha256']}`")
+          if entry['notes']:
+              print(f"\n{entry['notes']}")
+          PY
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" "out/$PACKAGE" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" "out/$PACKAGE" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --latest=false
+          fi
+          if ! gh release view core-channel --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create core-channel --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title core-channel \
+              --notes '应用检查 core 更新时读取这里的 stable.json 和签名。' --latest=false
+          fi
+          gh release upload core-channel out/stable.json out/stable.json.sig --repo "$GITHUB_REPOSITORY" --clobber
