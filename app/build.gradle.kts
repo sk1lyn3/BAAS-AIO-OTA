@@ -20,8 +20,12 @@ android {
         val coreApi = Regex("^CORE_API = (\\d+)$", RegexOption.MULTILINE)
             .find(file("src/main/python/core_loader.py").readText())!!.groupValues[1]
         buildConfigField("int", "CORE_API", coreApi)
-        buildConfigField("String", "CORE_CHANNEL_URL",
-            "\"https://github.com/sk1lyn3/BAAS-AIO/releases/download/core-channel/stable.json\"")
+        // Test builds install next to the released app and read their own core channel.
+        providers.gradleProperty("applicationIdSuffix").orNull?.let { applicationIdSuffix = it }
+        manifestPlaceholders["appLabel"] = providers.gradleProperty("appLabel").getOrElse("BAAS AIO")
+        val coreChannelUrl = providers.gradleProperty("coreChannelUrl")
+            .getOrElse("https://github.com/sk1lyn3/BAAS-AIO/releases/download/core-channel/stable.json")
+        buildConfigField("String", "CORE_CHANNEL_URL", "\"$coreChannelUrl\"")
     }
 
     compileOptions {
