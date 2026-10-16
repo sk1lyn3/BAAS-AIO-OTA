@@ -1,6 +1,5 @@
 package moe.baas.aio
 
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -203,30 +202,17 @@ object CoreBundle {
         File(root, "ext").listFiles().orEmpty().filter { it.name !in keep }.forEach { it.deleteRecursively() }
     }
 
-    /** Reject packages whose generated data no longer fits the settings screens of this APK. */
-    fun checkData(data: File, catalog: JSONArray, bundledDefaults: JSONObject) {
+    /**
+     * The package's catalog must fit the defaults and static tables it ships with, and its tasks must be valid.
+     * Saved profiles are not compared with the new defaults: core's self-test loads every profile with the new core.
+     */
+    fun checkData(data: File) {
         fun read(name: String) = try { File(data, name).readText() } catch (_: Exception) { throw Rejected("更新包缺少 $name") }
-        val defaults = JSONObject(read("profile-defaults.json"))
-        val config = defaults.getJSONObject("config"); val static = JSONObject(read("static-config.json"))
+        val defaults = read("profile-defaults.json"); val catalog = read("config-catalog.json"); val static = read("static-config.json")
         JSONObject(read("activities-info.json"))
-        val reference = bundledDefaults.getJSONObject("config")
-        for (group in 0 until catalog.length()) {
-            val fields = catalog.getJSONObject(group).getJSONArray("fields")
-            for (i in 0 until fields.length()) {
-                val field = fields.getJSONObject(i); val key = field.getString("key")
-                if (!config.has(key)) throw Rejected("新版本删除了设置项 $key，需要先更新应用")
-                if (reference.has(key) && kind(config.get(key)) != kind(reference.get(key))) throw Rejected("新版本改变了设置项 $key，需要先更新应用")
-                field.optString("goods").takeIf { it.isNotEmpty() }?.let { goods ->
-                    val table = static.optJSONObject(goods) ?: throw Rejected("新版本缺少商店数据 $goods")
-                    for (mode in listOf("CN", "Global", "JP")) table.optJSONArray(mode) ?: throw Rejected("新版本缺少商店数据 $goods")
-                }
-            }
-        }
-        try { ProfileStore.validateEvents(defaults.getJSONArray("events")) }
+        try { ConfigCatalog(catalog, defaults, static).check() }
+        catch (error: Exception) { throw Rejected("新版本的设置数据有误：${error.message}") }
+        try { ProfileStore.validateEvents(JSONObject(defaults).getJSONArray("events")) }
         catch (error: Exception) { throw Rejected("新版本的任务格式不受支持：${error.message}") }
-    }
-
-    private fun kind(value: Any) = when (value) {
-        is Boolean -> "boolean"; is Number -> "number"; is String -> "string"; is JSONArray -> "array"; is JSONObject -> "object"; else -> "null"
     }
 }

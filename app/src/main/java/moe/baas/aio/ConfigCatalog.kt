@@ -4,11 +4,13 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** UI field names and choices follow WebUI; values retain upstream config.json types. */
-class ConfigCatalog(context: Context) {
-    val groups = context.assets.open("config-catalog.json").bufferedReader().use { JSONArray(it.readText()) }
-    val defaults = JSONObject(CoreData.read(context, "profile-defaults.json")).getJSONObject("config")
-    val static = JSONObject(CoreData.read(context, "static-config.json"))
+/** UI field names and choices follow WebUI; values retain upstream config.json types. Each core ships its own catalog. */
+class ConfigCatalog(catalogText: String, defaultsText: String, staticText: String) {
+    constructor(context: Context) : this(CoreData.read(context, "config-catalog.json"),
+        CoreData.read(context, "profile-defaults.json"), CoreData.read(context, "static-config.json"))
+    val groups: JSONArray = JSONObject(catalogText).getJSONArray("groups")
+    val defaults: JSONObject = JSONObject(defaultsText).getJSONObject("config")
+    val static = JSONObject(staticText)
     fun fields(): List<JSONObject> = (0 until groups.length()).flatMap { i ->
         val fields = groups.getJSONObject(i).getJSONArray("fields")
         (0 until fields.length()).map { fields.getJSONObject(it) }
@@ -61,6 +63,19 @@ class ConfigCatalog(context: Context) {
                 if (!(original == "" && value == "")) number(value)
             }
             if (value is String) require(value.length <= 10000) { "配置内容过长" }
+        }
+    }
+
+    /** Install-time check that the catalog fits the defaults and static tables it ships with. */
+    fun check() {
+        for (field in fields()) {
+            val key = field.getString("key")
+            require(defaults.has(key)) { "设置项 $key 没有默认值" }
+            if (field.optString("kind") == "shop") {
+                val goods = field.getString("goods")
+                require(GameServer.MODES.all { static.optJSONObject(goods)?.optJSONArray(it) != null }) { "缺少商店数据 $goods" }
+            }
+            try { validate(key, defaults.get(key)) } catch (_: IllegalArgumentException) { throw IllegalArgumentException("设置项 $key 的默认值无效") }
         }
     }
 }

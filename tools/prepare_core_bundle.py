@@ -1,7 +1,7 @@
 """Build a signed BAAS core package and channel index that AIO installs without a new APK.
 
 The package holds the same baas-source.zip content as the APK (under source/), the generated JSON
-that Kotlin reads (under data/), bundle-manifest.json with every file's sha256, and an ECDSA P-256
+and the settings catalog that Kotlin reads (under data/), bundle-manifest.json with every file's sha256, and an ECDSA P-256
 signature of that manifest. The channel index carries the zip's sha256 and is signed with the same key.
 """
 import argparse
@@ -18,6 +18,26 @@ import prepare_baas_core  # noqa: E402
 
 FORMAT = 1
 DATA_FILES = ("profile-defaults.json", "static-config.json", "activities-info.json")
+CATALOG = Path(__file__).resolve().parents[1] / "app/src/main/assets/config-catalog.json"
+
+
+def check_catalog(catalog, defaults, static):
+    """Fail the build on what the app rejects at install: catalog keys without a default,
+    defaults outside their field's options, missing shop tables."""
+    config = defaults["config"]
+    for group in catalog["groups"]:
+        for field in group["fields"]:
+            key = field["key"]
+            if key not in config:
+                raise SystemExit(f"config-catalog.json: {key} has no default in this core")
+            values = {str(option["value"]) for option in field.get("options") or []}
+            default = config[key]
+            items = [i for row in default for i in (row if isinstance(row, list) else [row])] \
+                if isinstance(default, list) and field.get("kind") in ("teams", "slots") else [default]
+            if values and not all(str(i) in values for i in items):
+                raise SystemExit(f"config-catalog.json: default of {key} is not one of its options")
+            if field.get("goods") and not all(m in static.get(field["goods"], {}) for m in ("CN", "Global", "JP")):
+                raise SystemExit(f"config-catalog.json: {field['goods']} is missing from static data")
 
 
 def sign(key, payload):
@@ -38,6 +58,9 @@ def build(baas, revision, notes, key, output, min_version_code, max_version_code
                 entries["source/" + name] = source.read(name)
         for name in DATA_FILES:
             entries["data/" + name] = (assets / name).read_bytes()
+        entries["data/config-catalog.json"] = CATALOG.read_bytes()
+        check_catalog(json.loads(CATALOG.read_text(encoding="utf-8")), json.loads(entries["data/profile-defaults.json"]),
+                      json.loads(entries["data/static-config.json"]))
     source_manifest = json.loads(entries["source/source-manifest.json"])
     manifest = {
         "format": FORMAT, "coreApi": source_manifest["coreApi"],

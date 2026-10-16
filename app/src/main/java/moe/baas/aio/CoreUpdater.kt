@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -119,11 +118,9 @@ object CoreUpdater {
 
     fun install(context: Context, offer: CoreBundle.Offer, zip: File): String {
         check(idle) { "请等待当前任务结束" }
-        val catalog = context.assets.open("config-catalog.json").bufferedReader().use { JSONArray(it.readText()) }
-        val defaults = context.assets.open("profile-defaults.json").bufferedReader().use { JSONObject(it.readText()) }
         try {
             return CoreBundle.install(zip, offer, root(context), keys(context), BuildConfig.CORE_API, versionCode(context),
-                bundled(context)) { CoreBundle.checkData(it, catalog, defaults) }
+                bundled(context), CoreBundle::checkData)
         } finally { zip.parentFile?.deleteRecursively() }
     }
 
