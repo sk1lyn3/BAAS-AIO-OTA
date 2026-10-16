@@ -7,6 +7,7 @@ import org.json.JSONObject
 /**
  * UI field names and choices follow WebUI; values retain upstream config.json types. Each core ships its own catalog.
  * Default keys in no group and not "hidden" are shown under 其他参数, labelled by "other" or by their key.
+ * "tasks" gives scheduled tasks the settings section their 执行参数 opens and a tag.
  */
 class ConfigCatalog(catalogText: String, defaultsText: String, staticText: String) {
     constructor(context: Context) : this(CoreData.read(context, "config-catalog.json"),
@@ -15,6 +16,7 @@ class ConfigCatalog(catalogText: String, defaultsText: String, staticText: Strin
     val groups: JSONArray = root.getJSONArray("groups")
     val defaults: JSONObject = JSONObject(defaultsText).getJSONObject("config")
     val static = JSONObject(staticText)
+    private val tasks = root.getJSONObject("tasks")
     /** Section id of 其他参数, after the groups, 活动图 and 其他功能. */
     val otherSection get() = groups.length() + 2
     fun fields(): List<JSONObject> = (0 until groups.length()).flatMap { i ->
@@ -36,6 +38,14 @@ class ConfigCatalog(catalogText: String, defaultsText: String, staticText: Strin
                 .put("min", JSONObject.NULL).put("max", JSONObject.NULL).put("readOnly", value is JSONObject || value is JSONArray && !strings)
         }
     }
+
+    /** Section 执行参数 opens for [task], or null when the catalog gives it none. */
+    fun section(task: String): Int? = when (val group = tasks.optJSONObject(task)?.optString("group").orEmpty()) {
+        "" -> null
+        OTHER -> otherSection.takeIf { otherFields.isNotEmpty() }
+        else -> (0 until groups.length()).firstOrNull { groups.getJSONObject(it).getString("title") == group }
+    }
+    fun tag(task: String): String? = tasks.optJSONObject(task)?.optString("tag")?.ifEmpty { null }
 
     companion object {
         const val OTHER = "其他参数"

@@ -112,6 +112,7 @@ class HomeActivity : PreviewActivity() {
     private var pendingScroll = 0
     private var scheduleKeyValue = ""
     private var scheduleRows by mutableStateOf(emptyList<ScheduleRowModel>())
+    private val catalog by lazy { ConfigCatalog(this) }
     private var scheduleTotal by mutableIntStateOf(0)
     private var scheduleEnabled by mutableIntStateOf(0)
     private var scheduleSaved by mutableStateOf(false)
@@ -323,7 +324,7 @@ class HomeActivity : PreviewActivity() {
         scheduleSaved = false
         scheduleRows = indices.map { index ->
             val event = events.getJSONObject(index)
-            ScheduleRowModel(event, formatInterval(event.optDouble("interval")))
+            ScheduleRowModel(event, formatInterval(event.optDouble("interval")), catalog.tag(event.getString("func_name")))
         }
     }
     private fun scheduleIndices(events: JSONArray): List<Int> {
