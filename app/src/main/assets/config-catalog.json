@@ -929,5 +929,21 @@
       }
     ]
   }
-]
+],
+"hidden": [
+  "name", "_pass", "ap", "creditpoints", "pyroxene", "tactical_challenge_coin", "bounty_coin",
+  "alreadyCreateTime", "last_refresh_config_time", "create_item_holding_quantity",
+  "unfinished_normal_tasks", "unfinished_hard_tasks", "antiHarmony", "new_event_enable_state",
+  "cafe_reward_lowest_affection_first", "adbIP", "adbPort", "program_address", "control_method",
+  "screenshot_method", "emulator_wait_time", "emulatorIsMultiInstance",
+  "emulatorMultiInstanceNumber", "multiEmulatorName", "open_emulator_stat", "autostart",
+  "hotkey_run", "then", "assetsVisibility", "bannerVisibility", "push_after_completion",
+  "push_after_error", "push_json", "push_serverchan", "push_feishu", "push_wecom",
+  "push_telegram_bot_token", "push_telegram_chat_id", "push_telegram_proxy", "push_telegram_api"
+],
+"other": {
+  "cafe_reward_interaction_shot_delay": {"label": "咖啡厅互动截图间隔"},
+  "clear_friend_white_list": {"label": "好友白名单", "kind": "list"},
+  "lesson_each_region_object_priority": {"label": "各区域课程优先级"}
+}
 }

@@ -4,24 +4,47 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** UI field names and choices follow WebUI; values retain upstream config.json types. Each core ships its own catalog. */
+/**
+ * UI field names and choices follow WebUI; values retain upstream config.json types. Each core ships its own catalog.
+ * Default keys in no group and not "hidden" are shown under 其他参数, labelled by "other" or by their key.
+ */
 class ConfigCatalog(catalogText: String, defaultsText: String, staticText: String) {
     constructor(context: Context) : this(CoreData.read(context, "config-catalog.json"),
         CoreData.read(context, "profile-defaults.json"), CoreData.read(context, "static-config.json"))
-    val groups: JSONArray = JSONObject(catalogText).getJSONArray("groups")
+    private val root = JSONObject(catalogText)
+    val groups: JSONArray = root.getJSONArray("groups")
     val defaults: JSONObject = JSONObject(defaultsText).getJSONObject("config")
     val static = JSONObject(staticText)
+    /** Section id of 其他参数, after the groups, 活动图 and 其他功能. */
+    val otherSection get() = groups.length() + 2
     fun fields(): List<JSONObject> = (0 until groups.length()).flatMap { i ->
         val fields = groups.getJSONObject(i).getJSONArray("fields")
         (0 until fields.length()).map { fields.getJSONObject(it) }
     }
+    /** Fields for 其他参数: labelled keys first, then the rest by name. Nested lists and objects are read-only. */
+    val otherFields: List<JSONObject> by lazy {
+        val hidden = root.getJSONArray("hidden").let { list -> (0 until list.length()).map { list.getString(it) } }.toSet()
+        val other = root.getJSONObject("other")
+        val grouped = fields().map { it.getString("key") }.toSet()
+        val keys = defaults.keys().asSequence().filter { it !in grouped && it !in hidden }.toList()
+        val labelled = other.keys().asSequence().filter { it in keys }.toList()
+        (labelled + (keys - labelled.toSet()).sorted()).map { key ->
+            val spec = other.optJSONObject(key)
+            val value = defaults.get(key)
+            val strings = value is JSONArray && (spec?.optString("kind") == "list" || value.length() > 0 && (0 until value.length()).all { value.get(it) is String })
+            JSONObject().put("key", key).put("label", spec?.getString("label") ?: key).put("options", JSONArray())
+                .put("min", JSONObject.NULL).put("max", JSONObject.NULL).put("readOnly", value is JSONObject || value is JSONArray && !strings)
+        }
+    }
+
     companion object {
+        const val OTHER = "其他参数"
         /** Upstream defaults these to "" but core iterates them as lists (Baas_thread.update_create_priority). */
         fun isListText(key: String) = key.startsWith("createPriority_phase")
         fun splitList(raw: String) = JSONArray(raw.split(',', '，', '\n').map { it.trim() }.filter { it.isNotEmpty() })
     }
     fun validate(key: String, value: Any) {
-        val field = fields().firstOrNull { it.getString("key") == key } ?: error("Unknown configuration field: $key")
+        val field = (fields() + otherFields).firstOrNull { it.getString("key") == key } ?: error("Unknown configuration field: $key")
         val original = defaults.get(key)
         require(when (original) {
             is Boolean -> value is Boolean
