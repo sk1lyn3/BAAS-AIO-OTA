@@ -43,7 +43,8 @@ class ConfigCatalog(catalogText: String, defaultsText: String, staticText: Strin
         fun isListText(key: String) = key.startsWith("createPriority_phase")
         fun splitList(raw: String) = JSONArray(raw.split(',', '，', '\n').map { it.trim() }.filter { it.isNotEmpty() })
     }
-    fun validate(key: String, value: Any) {
+    /** [saved] is the profile's current value: option values in it stay valid even if this catalog no longer lists them. */
+    fun validate(key: String, value: Any, saved: Any? = null) {
         val field = (fields() + otherFields).firstOrNull { it.getString("key") == key } ?: error("Unknown configuration field: $key")
         val original = defaults.get(key)
         require(when (original) {
@@ -53,9 +54,12 @@ class ConfigCatalog(catalogText: String, defaultsText: String, staticText: Strin
             is JSONArray -> value is JSONArray
             else -> false
         }) { "${field.getString("label")}：格式不正确" }
+        val kept = HashSet<String>()
+        fun keep(item: Any?) { if (item is JSONArray) for (i in 0 until item.length()) keep(item.get(i)) else if (item != null) kept += item.toString() }
+        keep(saved)
         val choices = field.optJSONArray("options")
         fun choice(item: Any) {
-            if (choices != null && choices.length() > 0) require((0 until choices.length()).any {
+            if (choices != null && choices.length() > 0) require(item.toString() in kept || (0 until choices.length()).any {
                 choices.getJSONObject(it).getString("value") == item.toString()
             }) { "${field.getString("label")}：无效选项" }
         }

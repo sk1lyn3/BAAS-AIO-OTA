@@ -127,7 +127,7 @@ class ProfileStore(private val context: Context) {
         val catalog = ConfigCatalog(context)
         val current = JSONObject(baseline.raw)
         changes.keys().forEach { key ->
-            catalog.validate(key, changes.get(key)); current.put(key, changes.get(key))
+            catalog.validate(key, changes.get(key), baseline.values.get(key)); current.put(key, changes.get(key))
         }
         if (changes.length() > 0) {
             write(file, current.toString(2))

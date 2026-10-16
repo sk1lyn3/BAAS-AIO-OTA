@@ -89,7 +89,7 @@ class ConfigForm(private val context: Context, val profileId: String, state: Bun
     }
     private fun set(field: JSONObject, value: Any, refresh: Boolean = true) {
         check(!TaskRuntime.isActive) { "请先停止任务再修改参数" }
-        catalog.validate(field.getString("key"), value)
+        catalog.validate(field.getString("key"), value, baseline.values.get(field.getString("key")))
         draft.put(field.getString("key"), value)
         if (refresh) redraw() else { stamp++; changed() }
     }
