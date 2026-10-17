@@ -1,0 +1,342 @@
+package moe.baas.aio
+
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** Android owns wake-up times; BAAS still owns task selection and execution. */
+object ManagedMode {
+    const val TRIGGER = "moe.baas.aio.managed.TRIGGER"
+    private lateinit var context: Context
+    private val main = Handler(Looper.getMainLooper())
+    @Volatile var executionActive = false
+    /** Snapshot-observable revision bumped on every managed-prefs write, so Compose reads of enabled/phase/... recompose. */
+    private val revision = androidx.compose.runtime.mutableIntStateOf(0)
+    private val prefsChanged = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> bump() }
+    private fun bump() { androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot { revision.intValue++ } }
+    private var observed: android.content.SharedPreferences? = null
+    fun attach(value: Context) {
+        context = value.applicationContext; DebugTrace.attach(context.filesDir)
+        val current = context.getSharedPreferences("managed", Context.MODE_PRIVATE)
+        if (observed !== current) {
+            observed?.unregisterOnSharedPreferenceChangeListener(prefsChanged)
+            current.registerOnSharedPreferenceChangeListener(prefsChanged); observed = current; bump()
+            // Older builds could leave deleted profiles selected. Retire their recovery state too.
+            selectedIds().filterNot { java.io.File(context.filesDir, "profiles/$it/profile.json").isFile }
+                .forEach { select(it, false) }
+        }
+    }
+    private fun prefs() = revision.intValue.let { context.getSharedPreferences("managed", Context.MODE_PRIVATE) }
+    val enabled get() = revision.intValue.let { ::context.isInitialized } && prefs().getBoolean("enabled", false)
+    val generation get() = prefs().getLong("generation", 0)
+    val nextWakeAt get() = prefs().getLong("nextWakeAt", 0)
+    val nextProfileId get() = prefs().getString("nextProfileId", "").orEmpty()
+    val phase get() = prefs().getString("phase", "未开启托管")!!
+    fun selectedIds(): List<String> {
+        val values = JSONArray(prefs().getString("profiles", "[]"))
+        return (0 until values.length()).map { values.getString(it) }
+    }
+    @JvmStatic fun selectedPaths(): String {
+        val ids = selectedIds().toSet()
+        return JSONArray(ProfileStore(context).list().filter { it.id in ids && it.runnable }
+            .map { it.path.absolutePath }).toString()
+    }
+    @JvmStatic fun sessionToken() = generation
+    fun resourceRefreshPending(id: String) = id in prefs().getStringSet("resourceRefreshes", emptySet()).orEmpty()
+    @Synchronized fun requestResourceRefresh(id: String) {
+        val profile = ProfileStore(context).get(id)
+        check(id in selectedIds() && profile.runnable) { "请先启用该配置" }
+        check(!TaskRuntime.isProbeRunning && (enabled || !TaskRuntime.isActive)) { "请等待当前任务结束" }
+        if (enabled) {
+            if (resourceRefreshPending(id)) return
+            val pending = prefs().getStringSet("resourceRefreshes", emptySet()).orEmpty() + id
+            prefs().edit().putStringSet("resourceRefreshes", pending).commit()
+            scheduleChanged(context)
+        } else {
+            context.startForegroundService(Intent(context, TaskService::class.java).setAction(TaskService.START)
+                .putExtra("task", "core_task").putExtra("manualTask", "refresh_resources").putExtra("profileId", id))
+        }
+    }
+    @JvmStatic @Synchronized fun nextResourceRefresh(): String? {
+        val store = ProfileStore(context)
+        val pending = prefs().getStringSet("resourceRefreshes", emptySet()).orEmpty()
+        val valid = store.list().filter { it.id in selectedIds() && it.runnable && it.id in pending }
+        if (valid.size != pending.size) prefs().edit().putStringSet("resourceRefreshes", valid.map { it.id }.toSet()).commit()
+        return valid.firstOrNull()?.path?.absolutePath
+    }
+    @JvmStatic @JvmOverloads @Synchronized fun finishResourceRefresh(path: String, token: Long = generation) {
+        if (token != generation) return
+        val pending = prefs().getStringSet("resourceRefreshes", emptySet()).orEmpty() - java.io.File(path).name
+        prefs().edit().putStringSet("resourceRefreshes", pending).commit()
+    }
+    @Synchronized fun recovery(id: String): JSONObject =
+        JSONObject(prefs().getString("recovery", "{}")!!).optJSONObject(id) ?: JSONObject()
+    @JvmStatic fun profileRecovery(path: String): String = recovery(java.io.File(path).name).toString()
+    @JvmStatic @JvmOverloads fun saveRecovery(path: String, value: String, token: Long, cleared: String = "重试成功"): Boolean {
+        synchronized(this) {
+            val id = java.io.File(path).name
+            if (!enabled || token != generation || id !in selectedIds()) return false
+            val states = JSONObject(prefs().getString("recovery", "{}")!!)
+            val previous = states.optJSONObject(id) ?: JSONObject()
+            val state = JSONObject(value)
+            val history = failureHistory()
+            val before = JSONArray(history.toString()).put(previous)
+            if (state.length() == 0) {
+                // Resolving a failure updates its record; it is not a new failure.
+                for (index in history.length() - 1 downTo 0) {
+                    val entry = history.getJSONObject(index)
+                    if (entry.optString("profileId") == id && !entry.optBoolean("simulated")) {
+                        if (previous.length() != 0 || entry.optString("result") in listOf("手动重试", "已手动重试")) {
+                            entry.put("result", cleared)
+                        }
+                        break
+                    }
+                }
+            } else {
+                val name = runCatching { ProfileStore(context).get(id).name }.getOrDefault(id)
+                val suspended = state.optInt("failures") >= 2
+                val result = if (suspended) "重试失败，已挂起" else "已暂缓，${retryTime(state)} 重试"
+                val entry = JSONObject().put("time", System.currentTimeMillis()).put("profile", name).put("profileId", id)
+                    .put("result", result).put("error", state.optString("error", previous.optString("error")))
+                    .put("task", state.optString("task", previous.optString("task")))
+                    .put("phase", state.optString("phase", previous.optString("phase")))
+                    .put("context", state.optString("context", previous.optString("context")))
+                for (key in listOf("startedAt", "failedAt", "elapsedSeconds", "taskStartedAt", "taskElapsedSeconds", "frame")) {
+                    if (state.has(key)) entry.put(key, state.get(key))
+                }
+                history.put(entry)
+                while (history.length() > 40) history.remove(0)
+            }
+            if (state.length() == 0) states.remove(id) else states.put(id, state)
+            check(prefs().edit().putString("recovery", states.toString()).putString("failureHistory", history.toString()).commit()) { "Cannot save managed recovery state" }
+            FailureFrames.prune(context, before, history, states)
+            if (state.length() != 0) {
+                val entry = history.getJSONObject(history.length() - 1)
+                TaskNotifications.showManagedFailure(context, entry.optString("error"), entry.optString("profile"),
+                    entry.optString("result"), id)
+            }
+            return true
+        }
+    }
+    fun retryProfile(id: String) {
+        check(enabled && id in selectedIds()) { "请先开启该配置的托管" }
+        check(!TaskRuntime.isActive) { "请等待当前任务结束再重试" }
+        saveRecovery(ProfileStore(context).get(id).path.absolutePath, "{}", generation, "已手动重试")
+        scheduleChanged(context)
+    }
+    fun recoverySummary(): String {
+        val states = selectedIds().map { recovery(it) }
+        val delayed = states.count { it.optInt("failures") == 1 }
+        val suspended = states.count { it.optInt("failures") >= 2 }
+        return listOfNotNull(if (delayed > 0) "$delayed 个暂缓" else null,
+            if (suspended > 0) "$suspended 个挂起" else null).joinToString(" · ")
+    }
+    private fun retryTime(state: JSONObject): String = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        .format(java.util.Date((state.optDouble("retryAt") * 1000).toLong()))
+    fun recoveryNotice(): String = selectedIds().mapNotNull { id ->
+        val state = recovery(id)
+        if (state.length() == 0) null else {
+            val name = runCatching { ProfileStore(context).get(id).name }.getOrDefault(id)
+            if (state.optInt("failures") >= 2) "$name 已挂起 · 请手动重试"
+            else "$name 暂缓 · ${retryTime(state)} 重试"
+        }
+    }.joinToString("\n")
+    @Synchronized fun failureHistory(): JSONArray = JSONArray(prefs().getString("failureHistory", "[]"))
+    private fun cancelledRecoveryHistory(id: String? = null): JSONArray {
+        val history = failureHistory()
+        val seen = mutableSetOf<String>()
+        for (index in history.length() - 1 downTo 0) {
+            val entry = history.getJSONObject(index)
+            val profileId = entry.optString("profileId")
+            if (profileId.isBlank() || entry.optBoolean("simulated") || (id != null && id != profileId)) continue
+            // Only the latest record can own recovery; older entries are historical outcomes.
+            if (!seen.add(profileId)) continue
+            val result = entry.optString("result")
+            if (result.startsWith("已暂缓") || result == "重试失败，已挂起" ||
+                result in listOf("手动重试", "已手动重试")) {
+                entry.put("result", "重试已取消")
+            }
+        }
+        return history
+    }
+    @Synchronized fun clearFailureHistory() {
+        val history = failureHistory()
+        val names = ProfileStore(context).list().associate { it.name to it.id }
+        val seen = mutableSetOf<String>()
+        val retained = mutableListOf<JSONObject>()
+        for (index in history.length() - 1 downTo 0) {
+            val entry = history.getJSONObject(index)
+            if (entry.optBoolean("simulated")) continue
+            val id = entry.optString("profileId").ifBlank { names[entry.optString("profile")] ?: "" }
+            if (id.isNotEmpty() && seen.add(id) && recovery(id).length() > 0) retained.add(entry)
+        }
+        val remaining = JSONArray(retained.reversed())
+        check(prefs().edit().putString("failureHistory", remaining.toString()).commit()) { "Cannot clear managed failure history" }
+        FailureFrames.prune(context, history, remaining, JSONObject(prefs().getString("recovery", "{}")!!))
+    }
+    @JvmStatic fun isEnabled() = enabled
+    @JvmStatic fun setExecuting(value: Boolean) { executionActive = value }
+    @JvmStatic fun deviceInteractive(): Boolean =
+        context.getSystemService(android.os.PowerManager::class.java).isInteractive
+    @JvmStatic fun deviceReady(): Boolean =
+        deviceInteractive() &&
+            !context.getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+    @Synchronized fun select(id: String, selected: Boolean) {
+        val ids = selectedIds().toMutableList()
+        if (selected && id !in ids) ids.add(id)
+        if (!selected) {
+            ids.remove(id)
+            finishResourceRefresh(id)
+            val oldState = recovery(id)
+            val states = JSONObject(prefs().getString("recovery", "{}")!!).apply { remove(id) }
+            val history = cancelledRecoveryHistory(id)
+            prefs().edit().putString("recovery", states.toString()).putString("failureHistory", history.toString()).commit()
+            FailureFrames.prune(context, JSONArray().put(oldState), history, states)
+        }
+        prefs().edit().putString("profiles", JSONArray(ids).toString()).commit()
+        scheduleChanged(context)
+    }
+    fun canSchedule(): Boolean = Build.VERSION.SDK_INT < 31 ||
+        context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+    @Synchronized fun start() {
+        check(!enabled && !TaskRuntime.isActive && !TaskRuntime.isProbeRunning) { "请等待当前任务结束" }
+        check(selectedIds().isNotEmpty()) { "请先选择托管配置" }
+        check(canSchedule()) { "请允许闹钟和提醒权限" }
+        val oldStates = JSONObject(prefs().getString("recovery", "{}")!!)
+        val history = cancelledRecoveryHistory()
+        prefs().edit().putBoolean("enabled", true).putLong("generation", generation + 1)
+            .putString("phase", "准备托管").putString("recovery", "{}")
+            .putString("failureHistory", history.toString()).commit()
+        FailureFrames.pruneRecovery(context, oldStates, history)
+        DebugTrace.log("Managed enabled generation=$generation profiles=${selectedIds()}")
+        kick()
+    }
+    @Synchronized fun disable(value: Context) {
+        attach(value)
+        val oldStates = JSONObject(prefs().getString("recovery", "{}")!!)
+        val history = cancelledRecoveryHistory()
+        prefs().edit().putBoolean("enabled", false).putLong("generation", generation + 1)
+            .putStringSet("resourceRefreshes", emptySet())
+            .putLong("nextWakeAt", 0).putString("nextProfileId", "").putString("phase", "已停止托管").putString("recovery", "{}")
+            .putString("failureHistory", history.toString()).commit()
+        FailureFrames.pruneRecovery(context, oldStates, history)
+        context.getSystemService(AlarmManager::class.java).cancel(alarmIntent())
+        TaskNotifications.clearManagedWaiting(context)
+        main.removeCallbacks(replan)
+        DebugTrace.log("Managed disabled generation=$generation")
+    }
+    fun stop() {
+        disable(context)
+        if (TaskRuntime.isActive) context.startService(Intent(context, TaskService::class.java).setAction(TaskService.STOP))
+        else TaskRuntime.publish("stopped", "Managed mode stopped")
+    }
+    private fun alarmIntent(): PendingIntent = PendingIntent.getBroadcast(context, 76,
+        Intent(context, ManagedReceiver::class.java).setAction(TRIGGER).putExtra("generation", generation),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    private fun kick() {
+        if (!enabled || TaskRuntime.isActive || TaskRuntime.isProbeRunning) return
+        TaskNotifications.clearManagedWaiting(context)
+        try {
+            context.getSystemService(AlarmManager::class.java).cancel(alarmIntent())
+            prefs().edit().putLong("nextWakeAt", 0).putString("nextProfileId", "").putString("phase", "准备托管").commit()
+            context.startForegroundService(Intent(context, TaskService::class.java).setAction(TaskService.START)
+                .putExtra("task", "core_once").putExtra("managed", true).putExtra("managedGeneration", generation))
+        } catch (error: Exception) {
+            fail(error.message ?: "Cannot start managed service")
+        }
+    }
+    fun fire(value: Context, token: Long) {
+        attach(value)
+        DebugTrace.log("Managed alarm fired token=$token generation=$generation enabled=$enabled active=${TaskRuntime.isActive}")
+        if (!enabled || token != generation) return
+        if (TaskRuntime.isActive || TaskRuntime.isProbeRunning) arm(System.currentTimeMillis() + 60_000L)
+        else kick()
+    }
+    fun restore(value: Context) {
+        attach(value)
+        if (enabled) arm(maxOf(System.currentTimeMillis() + 15_000L, nextWakeAt))
+    }
+    fun finish(value: Context, token: Long, report: JSONObject) {
+        attach(value); executionActive = false
+        if (!enabled || token != generation) {
+            FailureFrames.prune(context, report.optJSONArray("profiles") ?: JSONArray(), failureHistory(),
+                JSONObject(prefs().getString("recovery", "{}")!!))
+            return
+        }
+        if (report.optString("state") != "completed") {
+            fail(report.optString("error", "Managed task failed; stopped"), report.optJSONObject("failureContext")); return
+        }
+        val next = report.optDouble("nextWakeAt", Double.NaN)
+        if (next.isFinite()) arm(maxOf(System.currentTimeMillis() + 15_000L, (next * 1000).toLong()),
+            report.optString("nextProfile").substringAfterLast('/'))
+        else {
+            context.getSystemService(AlarmManager::class.java).cancel(alarmIntent())
+            prefs().edit().putLong("nextWakeAt", 0).putString("nextProfileId", "").putString("phase", if (selectedIds().any { recovery(it).optInt("failures") >= 2 }) "等待手动重试" else "等待启用任务").commit()
+            TaskRuntime.publish("waiting", "Managed mode waiting", report.toString())
+            TaskNotifications.showManagedWaiting(context, 0, selectedIds().size)
+        }
+        if (nextResourceRefresh() != null) scheduleChanged(context)
+    }
+    private fun arm(time: Long, profileId: String = nextProfileId) {
+        try {
+            check(canSchedule()) { "Exact alarm permission is required" }
+            val show = PendingIntent.getActivity(context, 76, Intent(context, HomeActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+            context.getSystemService(AlarmManager::class.java).setAlarmClock(AlarmManager.AlarmClockInfo(time, show), alarmIntent())
+            DebugTrace.log("Managed alarm registered generation=$generation wakeAtMs=$time delayMs=${time - System.currentTimeMillis()}")
+            prefs().edit().putLong("nextWakeAt", time).putString("nextProfileId", profileId).putString("phase", "等待下次任务").commit()
+            if (!TaskRuntime.isActive && !TaskRuntime.isProbeRunning) {
+                TaskRuntime.publish("waiting", "Managed mode waiting", JSONObject().put("nextWakeAt", time / 1000.0).toString())
+                TaskNotifications.showManagedWaiting(context, time, selectedIds().size)
+            }
+        } catch (error: Exception) { fail(error.message ?: "Cannot register managed alarm") }
+    }
+    private fun recentRunContext(): String {
+        val logs = JSONArray(TaskRuntime.logSnapshot())
+        return (0 until logs.length()).map { logs.getJSONObject(it) }
+            .filter { it.optInt("level") in 1..2 }.takeLast(10)
+            .joinToString("\n") { it.optString("message").take(500) }.takeLast(3000)
+    }
+    @Synchronized private fun fail(message: String, details: JSONObject? = null) {
+        val history = failureHistory()
+        val before = JSONArray(history.toString())
+        val entry = JSONObject().put("time", System.currentTimeMillis()).put("profile", "托管")
+            .put("result", "托管已停止").put("error", message).put("phase", "managed").put("context", recentRunContext())
+        if (details != null) for (key in details.keys()) entry.put(key, details.get(key))
+        if (!entry.has("frame")) entry.put("frame", JSONObject().put("status", "not_captured"))
+        history.put(entry)
+        while (history.length() > 40) history.remove(0)
+        prefs().edit().putString("failureHistory", history.toString()).commit()
+        FailureFrames.prune(context, before, history, JSONObject(prefs().getString("recovery", "{}")!!))
+        disable(context)
+        prefs().edit().putString("phase", "托管停止：$message").commit()
+        TaskRuntime.appendLog(3, message)
+        TaskRuntime.publish("failed", message)
+        TaskNotifications.showManagedFailure(context, message)
+    }
+    private val replan = Runnable { kick() }
+    fun scheduleChanged(value: Context) {
+        attach(value)
+        if (!enabled || TaskRuntime.isActive) return
+        main.removeCallbacks(replan); main.postDelayed(replan, 500)
+    }
+}
+
+class ManagedReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ManagedMode.TRIGGER) {
+            ManagedMode.attach(context)
+            if (!ManagedMode.enabled || intent.getLongExtra("generation", -1) != ManagedMode.generation) return
+            context.getSystemService(android.os.PowerManager::class.java)
+                .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "BAAS:managed-handoff").acquire(10_000L)
+            ManagedMode.fire(context, intent.getLongExtra("generation", -1))
+        }
+        else ManagedMode.restore(context)
+    }
+}

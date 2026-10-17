@@ -16,10 +16,10 @@ on:
       aio_ref:
         description: 'AIO branch or commit in this repository whose builder and catalog are used'
         required: true
-        default: aio
+        default: main
         type: string
       notes:
-        description: 'Update notes shown in the app'
+        description: 'Optional notes override; default reads .github/release-notes/core-<sha7>.md'
         required: false
         type: string
 
@@ -52,6 +52,15 @@ jobs:
           sha=$(git -C core rev-parse FETCH_HEAD)
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "tag=core-${sha:0:7}" >> "$GITHUB_OUTPUT"
+      - name: Reject replacing a published core package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.core.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Core release $TAG already exists; published core packages are immutable." >&2
+            exit 1
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -71,6 +80,11 @@ jobs:
           NOTES: ${{ inputs.notes }}
         run: |
           : "${SIGNING_KEY:?Configure CORE_BUNDLE_SIGNING_KEY}"
+          if [[ -z "$NOTES" ]]; then
+            notes_file="aio/.github/release-notes/core-${CORE_SHA:0:7}.md"
+            test -s "$notes_file"
+            NOTES=$(cat "$notes_file")
+          fi
           key="$RUNNER_TEMP/core-signing.pem"
           trap 'rm -f -- "$key"' EXIT
           (umask 077; printf '%s\n' "$SIGNING_KEY" > "$key")
@@ -121,22 +135,10 @@ jobs:
           python3 - > "$RUNNER_TEMP/notes.md" <<'PY'
           import json, os
           entry = next(p for p in json.load(open('out/stable.json'))['packages'] if p['commit'] == os.environ['CORE_SHA'])
-          print(f"core 更新包 `core-{entry['commit'][:7]}`，来自 `{os.environ['CORE_REPOSITORY']}`。\n")
-          print(f"- 提交：`{entry['commit']}`")
-          print(f"- 提交时间：{entry['commitTime']}")
-          print(f"- coreApi：{entry['coreApi']}")
-          print(f"- 大小：{entry['size']} 字节")
-          print(f"- SHA-256：`{entry['zipSha256']}`")
-          if entry['notes']:
-              print(f"\n{entry['notes']}")
+          print(entry['notes'])
           PY
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$TAG" "out/$PACKAGE" --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
-          else
-            gh release create "$TAG" "out/$PACKAGE" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --latest=false
-          fi
+          gh release create "$TAG" "out/$PACKAGE" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --latest=false
           if ! gh release view core-channel --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create core-channel --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title core-channel \
               --notes '应用检查 core 更新时读取这里的 stable.json 和签名。' --latest=false

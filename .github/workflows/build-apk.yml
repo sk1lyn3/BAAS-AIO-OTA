@@ -1,66 +1,51 @@
-name: Build test APK
-run-name: APK ${{ inputs.aio_ref }} ${{ inputs.variant }}
+name: Build AIO APK
+run-name: AIO ${{ inputs.variant }}
 
 on:
   workflow_dispatch:
     inputs:
-      aio_ref:
-        description: 'AIO branch or commit in this repository'
-        required: true
-        default: aio
+      baas_repository:
+        description: 'Optional BAAS repository override (owner/repo); default is the submodule'
+        required: false
+        type: string
+      baas_ref:
+        description: 'Optional BAAS commit, tag or branch; default is the pinned submodule commit'
+        required: false
         type: string
       variant:
         description: 'APK build variant'
         type: choice
         default: release
         options: [release, debug]
-      core_repository:
-        description: 'Optional core repository override (owner/repo); default is the submodule'
-        required: false
-        type: string
-      core_ref:
-        description: 'Optional core commit or branch to bundle; default is the pinned submodule commit'
-        required: false
-        type: string
       ocr_revision:
         description: 'Pinned Android arm64 OCR prebuild commit'
         type: string
         default: 4d569eacc97a8eafbabdfe9d3fe672c9533357f1
 
 permissions:
-  contents: write
-
-concurrency:
-  group: apk-${{ inputs.aio_ref }}-${{ inputs.variant }}
-  cancel-in-progress: false
-
-env:
-  APPLICATION_ID_SUFFIX: .ota
-  APP_LABEL: BAAS OTA
-  APK_VARIANT: ${{ inputs.variant }}
+  contents: read
 
 jobs:
   apk:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.aio_ref }}
           path: aio
           submodules: true
           persist-credentials: false
-      - name: Override core source if requested
-        if: inputs.core_repository != '' || inputs.core_ref != ''
+      - name: Override BAAS source if requested
+        if: inputs.baas_repository != '' || inputs.baas_ref != ''
         env:
-          CORE_REPOSITORY: ${{ inputs.core_repository }}
-          CORE_REF: ${{ inputs.core_ref }}
+          BAAS_REPOSITORY: ${{ inputs.baas_repository }}
+          BAAS_REF: ${{ inputs.baas_ref }}
         run: |
-          if [[ -n "$CORE_REPOSITORY" ]]; then
-            [[ "$CORE_REPOSITORY" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]
-            git -C aio/baas-core remote set-url origin "https://github.com/$CORE_REPOSITORY.git"
+          if [[ -n "$BAAS_REPOSITORY" ]]; then
+            [[ "$BAAS_REPOSITORY" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]
+            git -C aio/baas-core remote set-url origin "https://github.com/$BAAS_REPOSITORY.git"
           fi
-          git -C aio/baas-core fetch --depth=1 -- origin "${CORE_REF:-HEAD}"
+          git -C aio/baas-core fetch --depth=1 -- origin "${BAAS_REF:-HEAD}"
           git -C aio/baas-core checkout --detach FETCH_HEAD
       - uses: actions/setup-java@v4
         with:
@@ -84,8 +69,9 @@ jobs:
           git -C ocr-prebuild remote add origin https://gitee.com/pur1fy/baas_-cpp_prebuild.git
           git -C ocr-prebuild fetch --depth=1 origin "$OCR_REVISION"
           git -C ocr-prebuild update-ref refs/remotes/origin/android-arm64-v8a "$(git -C ocr-prebuild rev-parse FETCH_HEAD)"
-      - name: Build signed APK
+      - name: Build APK
         env:
+          APK_VARIANT: ${{ inputs.variant }}
           OCR_PREBUILD: ${{ github.workspace }}/ocr-prebuild
           APK_OUTPUT_DIR: ${{ github.workspace }}/apk-artifacts
           APK_KEYSTORE_B64: ${{ secrets.APK_KEYSTORE_B64 }}
@@ -96,61 +82,17 @@ jobs:
           OPENBLAS_NUM_THREADS: '1'
           OMP_NUM_THREADS: '1'
         run: |
-          : "${APK_KEYSTORE_B64:?Configure the test signing secrets}"
-          export APK_KEYSTORE="$RUNNER_TEMP/test-signing.p12"
-          trap 'rm -f -- "$APK_KEYSTORE"' EXIT
-          printf '%s' "$APK_KEYSTORE_B64" | base64 --decode > "$APK_KEYSTORE"
-          chmod 600 "$APK_KEYSTORE"
-          aio/tools/build_apk.sh "$GITHUB_WORKSPACE/aio/baas-core" "$APK_VARIANT" HEAD \
-            "-PapplicationIdSuffix=$APPLICATION_ID_SUFFIX" "-PappLabel=$APP_LABEL" \
-            "-PcoreChannelUrl=https://github.com/$GITHUB_REPOSITORY/releases/download/core-channel/stable.json"
-      - name: Check package name and core channel
-        id: apk
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib, re, subprocess
-          out = pathlib.Path('apk-artifacts')
-          info = json.loads((out / 'build-info.json').read_text())
-          apk = out / info['apk']
-          tools = pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools/35.0.0'
-          badging = subprocess.check_output([str(tools / 'aapt'), 'dump', 'badging', str(apk)], text=True)
-          package = re.search(r"package: name='([^']+)'", badging).group(1)
-          assert package == 'moe.baas.aio' + os.environ['APPLICATION_ID_SUFFIX'], package
-          dex = subprocess.run(['unzip', '-p', str(apk), 'classes*.dex'], capture_output=True, check=True).stdout
-          channel = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/core-channel/stable.json".encode()
-          assert channel in dex, 'APK does not read this repository\'s core channel'
-          aio, core = info['aioCommit'][:7], info['baasCommit'][:7]
-          variant = info['variant']
-          name = f'baas-ota-{variant}-{aio}-core-{core}.apk'
-          apk.rename(out / name)
-          info.update(apk=name, applicationId=package)
-          (out / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              suffix = '-debug' if variant == 'debug' else ''
-              output.write(f"tag=app-{aio}{suffix}\naio={info['aioCommit']}\napk={name}\n")
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('```json\n' + json.dumps(info, indent=2) + '\n```\n')
-          PY
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.apk.outputs.tag }}
-          AIO_COMMIT: ${{ steps.apk.outputs.aio }}
-        run: |
-          python3 - > "$RUNNER_TEMP/notes.md" <<'PY'
-          import json
-          info = json.load(open('apk-artifacts/build-info.json'))
-          print(f"测试包，包名 `{info['applicationId']}`，可以和正式版同时安装。\n")
-          print(f"- 应用代码：`{info['aioCommit']}`")
-          print(f"- 内置 core：`core-{info['baasCommit'][:7]}`")
-          print(f"- 版本：{info['versionName']}（{info['versionCode']}），{info['variant']}")
-          print(f"- 签名证书 SHA-256：`{info['certificateSha256']}`")
-          print(f"- APK SHA-256：`{info['sha256']}`")
-          PY
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$TAG" apk-artifacts/*.apk apk-artifacts/build-info.json --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
-          else
-            gh release create "$TAG" apk-artifacts/*.apk apk-artifacts/build-info.json --repo "$GITHUB_REPOSITORY" \
-              --target "$AIO_COMMIT" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --latest
+          if [[ -n "$APK_KEYSTORE_B64" ]]; then
+            export APK_KEYSTORE="$RUNNER_TEMP/aio-signing.keystore"
+            trap 'rm -f -- "$APK_KEYSTORE"' EXIT
+            printf '%s' "$APK_KEYSTORE_B64" | base64 --decode > "$APK_KEYSTORE"
+            chmod 600 "$APK_KEYSTORE"
           fi
+          aio/tools/build_apk.sh "$GITHUB_WORKSPACE/aio/baas-core" "$APK_VARIANT" HEAD
+          cat "$APK_OUTPUT_DIR/build-info.json" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baas-aio-${{ inputs.variant }}-${{ github.run_number }}
+          path: apk-artifacts/
+          if-no-files-found: error
+          retention-days: 14
