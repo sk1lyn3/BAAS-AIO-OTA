@@ -17,7 +17,7 @@ def _lock():
     return jclass("moe.baas.aio.ProfileStore")
 
 
-def merge_events(events, defaults, server):
+def merge_events(events, defaults, server, enable_state="default"):
     """Return a merged copy of events; the input list is not modified."""
     if not isinstance(events, list) or not all(isinstance(e, dict) and isinstance(e.get("func_name"), str) for e in events):
         raise ValueError("Unexpected event.json structure")
@@ -31,7 +31,9 @@ def merge_events(events, defaults, server):
     for index, default in enumerate(defaults):
         current = present.get(default["func_name"])
         if current is None:
-            new = dict(default, enabled=False)
+            new = dict(default)
+            if enable_state in ("on", "off"):
+                new["enabled"] = enable_state == "on"
             merged.insert(min(index, len(merged)), new)
             present[new["func_name"]] = new
             continue
@@ -51,9 +53,10 @@ def merge_profile(directory, defaults):
     directory = Path(directory)
     event_path = directory / "event.json"
     original = event_path.read_text(encoding="utf-8")
-    server = json.loads((directory / "config.json").read_text(encoding="utf-8")).get("server", "日服")
+    config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
+    server = config.get("server", "日服")
     events = json.loads(original)
-    merged = merge_events(events, defaults, server)
+    merged = merge_events(events, defaults, server, config.get("new_event_enable_state", "default"))
     if merged == events:
         return
     backups = directory / ".core-backup"
