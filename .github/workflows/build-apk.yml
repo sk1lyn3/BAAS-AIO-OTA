@@ -1,5 +1,5 @@
 name: Build test APK
-run-name: APK ${{ inputs.aio_ref }}
+run-name: APK ${{ inputs.aio_ref }} ${{ inputs.variant }}
 
 on:
   workflow_dispatch:
@@ -9,7 +9,12 @@ on:
         required: true
         default: aio
         type: string
-      core_repository:
+      variant:
+      description: 'APK build variant'
+      type: choice
+      default: release
+      options: [release, debug]
+    core_repository:
         description: 'Optional core repository override (owner/repo); default is the submodule'
         required: false
         type: string
@@ -26,12 +31,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: apk-${{ inputs.aio_ref }}
+  group: apk-${{ inputs.aio_ref }}-${{ inputs.variant }}
   cancel-in-progress: false
 
 env:
   APPLICATION_ID_SUFFIX: .ota
   APP_LABEL: BAAS OTA
+  APK_VARIANT: ${{ inputs.variant }}
 
 jobs:
   apk:
@@ -95,7 +101,7 @@ jobs:
           trap 'rm -f -- "$APK_KEYSTORE"' EXIT
           printf '%s' "$APK_KEYSTORE_B64" | base64 --decode > "$APK_KEYSTORE"
           chmod 600 "$APK_KEYSTORE"
-          aio/tools/build_apk.sh "$GITHUB_WORKSPACE/aio/baas-core" release HEAD \
+          aio/tools/build_apk.sh "$GITHUB_WORKSPACE/aio/baas-core" "$APK_VARIANT" HEAD \
             "-PapplicationIdSuffix=$APPLICATION_ID_SUFFIX" "-PappLabel=$APP_LABEL" \
             "-PcoreChannelUrl=https://github.com/$GITHUB_REPOSITORY/releases/download/core-channel/stable.json"
       - name: Check package name and core channel
@@ -114,12 +120,14 @@ jobs:
           channel = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/core-channel/stable.json".encode()
           assert channel in dex, 'APK does not read this repository\'s core channel'
           aio, core = info['aioCommit'][:7], info['baasCommit'][:7]
-          name = f'baas-ota-{aio}-core-{core}.apk'
+          variant = info['variant']
+          name = f'baas-ota-{variant}-{aio}-core-{core}.apk'
           apk.rename(out / name)
           info.update(apk=name, applicationId=package)
           (out / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f"tag=app-{aio}\naio={info['aioCommit']}\napk={name}\n")
+              suffix = '-debug' if variant == 'debug' else ''
+              output.write(f"tag=app-{aio}{suffix}\naio={info['aioCommit']}\napk={name}\n")
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('```json\n' + json.dumps(info, indent=2) + '\n```\n')
           PY
@@ -135,7 +143,7 @@ jobs:
           print(f"测试包，包名 `{info['applicationId']}`，可以和正式版同时安装。\n")
           print(f"- 应用代码：`{info['aioCommit']}`")
           print(f"- 内置 core：`core-{info['baasCommit'][:7]}`")
-          print(f"- 版本：{info['versionName']}（{info['versionCode']}）")
+          print(f"- 版本：{info['versionName']}（{info['versionCode']}），{info['variant']}")
           print(f"- 签名证书 SHA-256：`{info['certificateSha256']}`")
           print(f"- APK SHA-256：`{info['sha256']}`")
           PY
