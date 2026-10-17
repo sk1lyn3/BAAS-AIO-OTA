@@ -122,7 +122,7 @@ object CoreUpdateDialog {
                 addView(UiTheme.text(activity, "大小 ${megabytes(offer.size)} MB", 12f, UiTheme.muted))
                 if (offer.notes.isNotBlank()) {
                     addView(UiTheme.text(activity, "更新说明", 13f).apply { setTypeface(null, Typeface.BOLD); setPadding(paddingLeft, UiTheme.dp(activity, 10), paddingRight, 0) })
-                    addView(UiTheme.text(activity, offer.notes, 13f))
+                    addView(ReleaseNotes.view(activity, offer.notes))
                 }
             }
             UiTheme.dialog(activity).setTitle("发现新版本").setView(ScrollView(activity).apply { addView(body) })
