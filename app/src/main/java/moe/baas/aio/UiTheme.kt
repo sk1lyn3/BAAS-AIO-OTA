@@ -162,7 +162,7 @@ object UiTheme {
         val shape = if (primary) GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Ui.Cyan.toArgb(), Ui.Blue.toArgb(), Ui.BlueDeep.toArgb())).apply {
             cornerRadius = dp(context, 12).toFloat()
         } else background(context, Color.TRANSPARENT, 12).apply { setStroke(dp(context, 1), border) }
-        background = if (isEnabled) RippleDrawable(ColorStateList.valueOf(if (primary) 0x33FFFFFF else 0x1A0A93D8), shape, null)
+        background = if (isEnabled) RippleDrawable(ColorStateList.valueOf(if (primary) 0x33FFFFFF else if (BuildConfig.DEBUG) Ui.Blue.copy(alpha = .10f).toArgb() else 0x1A0A93D8), shape, null)
             else background(context, pale, 12).apply { setStroke(dp(context, 1), border) }
         setTextColor(if (!isEnabled) muted else if (primary) Color.WHITE else blue)
     }
