@@ -14,7 +14,7 @@ import kotlin.concurrent.thread
 
 /** Protocol v1: u32 big-endian JSON length, JSON, then payloadBytes binary bytes. */
 class CompanionSocketServer(private val service: CompanionUserService) : AutoCloseable {
-    private val listener = LocalServerSocket("baas-aio-companion-v1")
+    private val listener = LocalServerSocket("baas-aio-ota-companion-v1")
     private val clients = ConcurrentHashMap.newKeySet<LocalSocket>()
     private val slots = Semaphore(4)
     @Volatile private var closed = false

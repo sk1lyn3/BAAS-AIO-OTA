@@ -17,12 +17,12 @@ import java.io.File
 /** AIO owns its Companion runtime inside this Shizuku root/ADB process. */
 class SocketBroker : ISocketBroker.Stub() {
     companion object {
-        const val SERVICE_VERSION = 41
+        const val SERVICE_VERSION = 42
         fun serviceArgs(context: android.content.Context) =
             rikka.shizuku.Shizuku.UserServiceArgs(android.content.ComponentName(context, SocketBroker::class.java))
                 .daemon(false).processNameSuffix("aio-broker").debuggable(BuildConfig.DEBUG)
                 .version(SERVICE_VERSION).tag("baas-aio-broker")
-        private const val SOCKET_NAME = "baas-aio-companion-v1"
+        private const val SOCKET_NAME = "baas-aio-ota-companion-v1"
     }
     private var service: CompanionUserService? = null
     @Volatile private var managedScreenHidden = false
