@@ -1159,7 +1159,7 @@ class HomeActivity : PreviewActivity() {
                     android.net.Uri.parse("package:$packageName"))) }
             }
         }
-        if (BuildConfig.DEBUG) SettingsCard("开发诊断", Modifier.homeItem()) { safely { startActivity(Intent().setClassName(this, "$packageName.MainActivity")) } }
+        if (BuildConfig.DEBUG) SettingsCard("开发诊断", Modifier.homeItem()) { safely { startActivity(Intent().setClassName(this, "moe.baas.aio.MainActivity")) } }
         val core = remember { runCatching { CoreUpdater.status(this) }.getOrNull() }
         SettingsCard("更新", Modifier.homeItem(), core?.let { CoreUpdateDialog.version(it.commit, it.commitTime) }) { safely { CoreUpdateDialog.show(this) } }
         SettingsCard("关于", Modifier.homeItem()) { safely { AboutDialog.show(this) } }
