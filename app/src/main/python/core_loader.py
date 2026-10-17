@@ -128,7 +128,7 @@ def _select(files_dir):
         attempts = int(state.get("bootAttempts") or 0)
         if attempts >= MAX_BOOT_ATTEMPTS:
             state["pending"] = None; state["bootAttempts"] = 0
-            _fail(state, "新版本未能完成启动检查，已退回上一个版本", "self-test did not finish twice")
+            _fail(state, "新版本未能完成启动检查，已回退更新前版本", "self-test did not finish twice")
             write_state(files_dir, state)
         else:
             # Persist the attempt before importing anything that could kill the process.
@@ -146,7 +146,7 @@ def _select(files_dir):
                 _unload(selected_root=files_dir / "core" / "ext" / pending / "source", saved=saved)
                 state = read_state(files_dir)
                 state["pending"] = None; state["bootAttempts"] = 0
-                _fail(state, "新版本无法在当前应用上运行，已退回上一个版本", _describe(error))
+                _fail(state, "新版本无法在当前应用上运行，已回退更新前版本", _describe(error))
                 write_state(files_dir, state)
             else:
                 state = read_state(files_dir)

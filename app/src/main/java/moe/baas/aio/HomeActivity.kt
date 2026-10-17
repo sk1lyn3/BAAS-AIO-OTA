@@ -219,7 +219,7 @@ class HomeActivity : PreviewActivity() {
         store.initialize(); page = state?.getString("page") ?: "主页"
         if (state == null) CoreUpdater.testPending(this) { passed, error ->
             if (passed) UiNotice.show(this, "core 已更新")
-            else if (!isFinishing && !isDestroyed) UiTheme.dialog(this).setTitle("更新未生效").setMessage(error ?: "新版本无法在当前应用上运行，已退回上一个版本")
+            else if (!isFinishing && !isDestroyed) UiTheme.dialog(this).setTitle("更新未生效").setMessage(error ?: "新版本无法在当前应用上运行，已回退更新前版本")
                 .setPositiveButton("重新启动") { _, _ -> safely { CoreUpdater.restart(this) } }.setCancelable(false).show()
         }
         restoredSettings = state?.getBundle("settingsPanels")
