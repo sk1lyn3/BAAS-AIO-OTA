@@ -74,15 +74,21 @@ object CoreUpdater {
         } finally { disconnect() }
     }
 
-    /** Network call; returns a package newer than the core this APK would run, or null. */
-    fun check(context: Context, channelUrl: String = BuildConfig.CORE_CHANNEL_URL): CoreBundle.Offer? {
+    data class CheckResult(val offer: CoreBundle.Offer?, val needsAppUpdate: Boolean)
+
+    /** Report newer compatible cores and newer cores blocked by the app version independently. */
+    fun check(context: Context, channelUrl: String = BuildConfig.CORE_CHANNEL_URL): CheckResult {
         val body = fetch(context, channelUrl); val signature = fetch(context, "$channelUrl.sig")
-        val offer = CoreBundle.offer(body, signature, keys(context), BuildConfig.CORE_API, versionCode(context)) ?: return null
+        val updates = CoreBundle.updates(body, signature, keys(context), BuildConfig.CORE_API, versionCode(context))
         val current = status(context); val bundled = bundled(context)
-        return offer.takeIf {
+        fun newer(it: CoreBundle.Offer) =
             CoreBundle.newer(it.commit, it.commitTime, current.commit, current.commitTime) &&
                 CoreBundle.newer(it.commit, it.commitTime, bundled.getString("head"), bundled.getString("commitTime"))
-        }
+        val offer = updates.compatible?.takeIf(::newer)
+        val needsAppUpdate = updates.needsAppUpdate?.let {
+            newer(it) && (offer == null || CoreBundle.newer(it.commit, it.commitTime, offer.commit, offer.commitTime))
+        } == true
+        return CheckResult(offer, needsAppUpdate)
     }
 
     class Cancelled : Exception()

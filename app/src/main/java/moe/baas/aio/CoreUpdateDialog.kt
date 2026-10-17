@@ -2,6 +2,7 @@ package moe.baas.aio
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Typeface
 import android.graphics.drawable.ClipDrawable
 import android.graphics.drawable.GradientDrawable
@@ -111,9 +112,16 @@ object CoreUpdateDialog {
 
     private fun checkForUpdate(activity: Activity) {
         val waiting = progress(activity, "正在检查更新")
-        background(activity, waiting.dialog, { CoreUpdater.check(activity) }) { offer ->
+        background(activity, waiting.dialog, { CoreUpdater.check(activity) }) { result ->
+            val offer = result.offer
             if (offer == null) {
-                UiTheme.dialog(activity).setMessage("已是最新版本").setPositiveButton("确定", null).show()
+                if (result.needsAppUpdate) {
+                    UiTheme.dialog(activity).setTitle("需要更新应用").setMessage("有新的 core，需要先更新应用。")
+                        .setPositiveButton("前往下载") { _, _ -> openAppDownload(activity) }
+                        .setNegativeButton("关闭", null).show()
+                } else {
+                    UiTheme.dialog(activity).setMessage("当前 core 已是可用的最新版本").setPositiveButton("确定", null).show()
+                }
                 return@background
             }
             val body = UiTheme.column(activity).apply {
@@ -124,11 +132,19 @@ object CoreUpdateDialog {
                     addView(UiTheme.text(activity, "更新说明", 13f).apply { setTypeface(null, Typeface.BOLD); setPadding(paddingLeft, UiTheme.dp(activity, 10), paddingRight, 0) })
                     addView(ReleaseNotes.view(activity, offer.notes))
                 }
+                if (result.needsAppUpdate) addView(UiTheme.text(activity, "更新应用可使用更新的 core", 12f, UiTheme.muted))
             }
-            UiTheme.dialog(activity).setTitle("发现新版本").setView(ScrollView(activity).apply { addView(body) })
+            val dialog = UiTheme.dialog(activity).setTitle("发现新版本").setView(ScrollView(activity).apply { addView(body) })
                 .setPositiveButton("下载并安装") { _, _ -> install(activity, offer) }
-                .setNegativeButton("取消", null).show()
+                .setNegativeButton("取消", null)
+            if (result.needsAppUpdate) dialog.setNeutralButton("更新应用") { _, _ -> openAppDownload(activity) }
+            dialog.show()
         }
+    }
+
+    private fun openAppDownload(activity: Activity) = safely(activity) {
+        val url = BuildConfig.CORE_CHANNEL_URL.substringBefore("/releases/") + "/releases/latest"
+        activity.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
     }
 
     private fun megabytes(bytes: Long) = String.format(Locale.ROOT, "%.1f", bytes / 1048576.0)

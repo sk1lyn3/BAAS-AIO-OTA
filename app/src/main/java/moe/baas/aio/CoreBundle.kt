@@ -23,6 +23,7 @@ object CoreBundle {
     class Rejected(message: String) : Exception(message)
 
     data class Offer(val commit: String, val commitTime: String, val url: String, val zipSha256: String, val size: Long, val notes: String)
+    data class Updates(val compatible: Offer?, val needsAppUpdate: Offer?)
 
     fun publicKeys(json: String): List<PublicKey> {
         val keys = JSONObject(json).getJSONArray("keys")
@@ -38,17 +39,22 @@ object CoreBundle {
         } catch (_: Exception) { false }
     }
 
-    /** Newest package in a signed channel index that this APK can install, or null. */
-    fun offer(body: ByteArray, signature: ByteArray, keys: List<PublicKey>, coreApi: Int, versionCode: Long): Offer? {
+    /** Keep compatible updates separate from packages which require a newer app. Older APIs do not. */
+    fun updates(body: ByteArray, signature: ByteArray, keys: List<PublicKey>, coreApi: Int, versionCode: Long): Updates {
         if (!verified(keys, body, signature)) throw Rejected("更新信息签名无效")
         val packages = JSONObject(String(body, Charsets.UTF_8)).getJSONArray("packages")
-        return (0 until packages.length()).map { packages.getJSONObject(it) }
-            .filter { it.getInt("coreApi") == coreApi && supports(it, versionCode) }
-            .maxByOrNull { instant(it.getString("commitTime")) }
-            ?.let {
-                Offer(it.getString("commit"), it.getString("commitTime"), it.getString("url"),
-                    it.getString("zipSha256").lowercase(), it.getLong("size"), it.optString("notes"))
-            }
+        val entries = (0 until packages.length()).map { packages.getJSONObject(it) }
+        fun latest(items: List<JSONObject>) = items.maxByOrNull { instant(it.getString("commitTime")) }?.let {
+            Offer(it.getString("commit"), it.getString("commitTime"), it.getString("url"),
+                it.getString("zipSha256").lowercase(), it.getLong("size"), it.optString("notes"))
+        }
+        return Updates(
+            latest(entries.filter { it.getInt("coreApi") == coreApi && supports(it, versionCode) }),
+            latest(entries.filter {
+                val api = it.getInt("coreApi")
+                (it.isNull("maxVersionCode") || versionCode <= it.getLong("maxVersionCode")) &&
+                    (api > coreApi || api == coreApi && !it.isNull("minVersionCode") && versionCode < it.getLong("minVersionCode"))
+            }))
     }
 
     /** Committer time with offset (git %cI); compared as a UTC instant. */
