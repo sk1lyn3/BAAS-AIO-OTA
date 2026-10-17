@@ -10,11 +10,11 @@ on:
         default: aio
         type: string
       variant:
-      description: 'APK build variant'
-      type: choice
-      default: release
-      options: [release, debug]
-    core_repository:
+        description: 'APK build variant'
+        type: choice
+        default: release
+        options: [release, debug]
+      core_repository:
         description: 'Optional core repository override (owner/repo); default is the submodule'
         required: false
         type: string
